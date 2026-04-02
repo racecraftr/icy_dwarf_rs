@@ -1,0 +1,89 @@
+ICY DWARF v25.x INPUT FILE - Saturn system
+
+1 for Yes, 0 for No
+--------------------------------------------------------------------------------------------------------
+| Housekeeping |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+|-----------------------------------------------|------------------------------------------------------|
+| Warnings?                                     | 0                                                    |
+| Recover?                                      | 0                                                    |
+|-----------------------------------------------|------------------------------------------------------|
+| Grid |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+|-----------------------------------------------|------------------------------------------------------|
+| Number of grid zones                          | 200                                                  |
+| Thermal simulation time step (yr)             | 100                                                  |
+| Moon-moon interaction speedup factor          | 1000                                                 |
+| Total time of thermal simulation (Myr)        | 4600                                                 |
+| Output every (Myr)                            | 10                                                   |
+|-----------------------------------------------|------------------------------------------------------|
+| Saturn parameters      |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+|-----------------------------------------------|------------------------------------------------------|
+| Mass (kg) (0 if world is not a moon)          | 5.6834e26                                            |
+| Radius (km)                                   | 60330                                                |
+| Coef of moment of inertia (.4 if homogeneous) | 0.210                                                |
+| Tidal Q (initial,today,{0:lin 1:exp 2:1-exp}) | 15000 15000 0                                        |
+| Love number k2; zonal gravity harmonics J2, J4| 0.382 16290.573e-6 -935.314e-6                       |
+| Resonant tidal locking with inertial waves?   | 1 # ignored if Eccentricity Model = 2                |
+| Spin period (h)                               | 10.546   (Helled et al. 2015)                        |
+| Number of moons                               | 1                                                    |
+| Ring mass (kg) (0 if no rings)                | 1.54e19                                              |
+| Ring inner edge (km)                          | 92000                                                |
+| Ring outer edge (km)                          | 140000                                               |
+|-----------------------------------------------|------------------------------------------------------|
+| Icy world parameters |||||||||||||||||||||||||| Rhea     |
+|-----------------------------------------------|----------|----------|----------|----------|----------|
+| Radius assuming zero porosity (km)            | 762.2    |
+| Density assuming zero porosity (g cm-3)       | 1.267    |
+| Surface temperature (K)                       | 72       |
+| Initial temperature (K)                       | 270      |
+| Time of formation (Myr)                       | 4000     |
+| Formed from ring?                             | 0        |
+| Ammonia w.r.t. water                          | 0.01     |
+| Briny liquid? y=1, n=0                        | 0        |
+| Initial degree of hydration                   | 1        |
+| Hydrate/dehydrate?                            | 1        |
+| Initial porosity volume fraction              | 0.7      |
+| Fraction of rock in fines                     | 0        |
+| Core ice/liquid water volume fraction         | 0        |
+| Start differentiated?                         | 0        |
+| Initial orbital semi-major axis (km)          | 482525   |
+| Initial orbital eccentricity                  | 0.001    |
+| Initial orbital inclination (º)               | 7        |
+| Initial obliquity (º)                         | 5        | #Cassini state for incl 3.5 deg is 0.2º
+| Allow orbit to change?                        | 1        |
+| Retrograde orbit?                             | 0        |
+| Resonant tidal locking timescale (Gyr)        | 10       |
+|-----------------------------------------------|------------------------------------------------------|
+| Dry rock density (g cm-3)                     | 3.8                                                  |
+| Hydrated rock density (g cm-3)                | 2.9                                                  |
+| Chondrite type? CI=0 CO=1                     | 0                                                    |
+| Tidal rheology? Maxw=2 Burg=3 Andr=4 SunCoop=5| 5                                                    |
+| Eccentricity Model? e2=0 e10-CPL=1 e10-CTL=2  | 2                                                    |
+| Tidal heating x...?                           | 1                                                    |
+| Lookup tbl for orbit evol? #par #rows Dtime(y)| 0 10 10000 5000                                      |
+|-----------------------------------------------|------------------------------------------------------|
+| Subroutines ||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+|-----------------------------------------------|------------------------------------------------------|
+| Run thermal code?                             | 1                                                    |
+| Generate core crack aTP table?                | 0                                                    |
+| Generate water alpha beta table?              | 0                                                    |
+| Generate crack species log K with CHNOSZ?     | 0                                                    |
+| Run geochemistry code? (min max step)         | 0                                                    |
+|   Temperature                                 | 0 300 50                                             |
+|   Pressure                                    | 200 1400 200                                         |
+|   pe = FMQ + ...                              | -6 6 1                                               |
+|   Water:rock mass ratio                       | 0.1 10 10                                            |
+| Run compression code?                         | 0                                                    |
+| Run cryovolcanism code?                       | 0                                                    |
+|   After how many Myr?                         | 2500                                                 |
+|   Minimum temperature to run CHNOSZ (K)       | 273                                                  |
+|-----------------------------------------------|------------------------------------------------------|
+| Core crack options |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+|-----------------------------------------------|------------------------------------------------------|
+| Include thermal expansion/contrac mismatch?   | 1                                                    |
+| Include pore water expansion?                 | 1                                                    |
+| Include hydration/dehydration vol changes?    | 0                                                    |
+| Include dissolution/precipitation...?         | 0                                                    |
+|   ... of silica?                              | 1                                                    |
+|   ... of serpentine?                          | 1                                                    |
+|   ... of carbonate (magnesite)?               | 1                                                    |
+|-------------------------------------------------------------------------------------------------------

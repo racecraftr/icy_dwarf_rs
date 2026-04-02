@@ -1,0 +1,15 @@
+[package]
+name = "icy_dwarf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_repr = "0.1.20"
+faer = "0.23"
+toml = "1.1.0+spec-1.1.0"
+nalgebra = "0.34.2"
+num = "0.4.3"
+
+[profile.dev.package.faer]
+opt-level = 3

@@ -1,0 +1,104 @@
+# this defines a table.
+# it has a key-value pair.
+[housekeeping]
+warnings = false
+recover = false
+
+[grid]
+n_zones = 200  # number of grid zones. also, comments are supported! wow!
+time_step = 100
+speedup = 1000
+time_total = 4600
+output_every = 10
+
+[saturn]
+mass = 5.6834e25
+rad = 60330
+moi_coef = 0.210
+tidal_q = { init = 15000, today = 15000, model = 0 }
+k2 = 0.382  # love number
+j2 = 16290.573e-6
+j4 = -935.314e-6
+tidal_resonant = true
+spin_period = 10.546
+ring = { mass = 1.54e19, inner = 92000, outer = 140_000 }
+# we don't need to specify the number of moons, as that can be dynamically inferred.
+
+[world_spec]
+rho_rock_dry = 3.8
+rho_rock_hydr = 2.9
+chondrite = false
+rhelogy = 5
+ecc_model = 2
+tidal_heating = true
+lookup_tbl = [
+  0,
+  10,
+  10_000,
+  5_000
+]  # supports arrays and different number formats
+
+# this is an array of tables.
+# We can define each icy world as a table in this array.
+# A parser can then count the number of moons.
+[[worlds]]
+name = "Rhea"
+r_p = 762.2
+rho_p = 1.267
+temp_surf = 72
+temp_init = 270
+t_form = 4000
+from_ring = false
+ammonia = 0.01
+briny = false  # booleans are built-in
+hydr_init = 1.0
+hydrate = false
+por_init = 0.7
+rock_frac = 0.0
+rock_h20 = 0.0
+start_diff = false
+orb_a_init = 482525
+orb_e_init = 0.001
+orb_i_init = 7
+orb_o_init = 5  # cassini state for incl 3.5 deg is 0.2º
+orb_can_change = true
+retrograde = false
+t_reslock = 10
+
+# to define another world, we can do this:
+# [[worlds]]
+# name = "Ceres"
+# r_p = ...
+# ...
+
+[subroutines]
+run_therm = true
+gen_crack_core = false
+gen_water_ab = false
+gen_crack_sp = false
+run_geo = false
+run_comp = false
+run_cryo = false
+
+# this describes a sub-table.
+# it will belong to the subroutines table as the key "geo"
+[subroutines.geo]
+temp = { min = 0, max = 300, step = 50 }
+pressure = { min = 200, max = 1400, step = 200 }
+pe = { min = -6, max = 6, step = 1 }
+wm_ratio = { min = 0.1, max = 10, step = 10 }  # wut
+
+[subroutines.cryo]
+after = 2500
+min_temp_chnosz = 273
+
+[core_crack]
+incl_mismatch = true
+incl_pore = true
+incl_hydr = false
+incl_dissol = false
+
+[core_crack.dissol]
+of_silica = true
+of_serp = true
+of_carb = true
