@@ -2,6 +2,7 @@ mod input;
 mod planet_system;
 mod thermal;
 mod tropf;
+mod orbit;
 
 #[allow(dead_code)]
 pub mod consts {

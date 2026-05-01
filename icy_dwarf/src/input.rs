@@ -99,7 +99,7 @@ pub enum TidalRhel {
 }
 
 #[derive(Default, Debug, Clone, Deserialize)]
-pub struct WordSpec {
+pub struct WorldSpec {
     pub rho_rock_dry: f64,
     pub rho_rock_hydr: f64,
     pub chondrite: bool,
@@ -163,7 +163,7 @@ pub struct SubroutinesGeo {
     pub temp: GeoInput,
     pub pressure: GeoInput,
     pub pe: GeoInput,
-    pub wm_ratio: GeoInput,
+    pub wr_ratio: GeoInput,
 }
 
 #[derive(Default, Debug, Clone, Deserialize)]
@@ -190,7 +190,7 @@ pub struct ParsedInput {
     pub housekeeping: Housekeeping,
     pub grid: Grid,
     pub saturn: Saturn,
-    pub world_spec: WordSpec,
+    pub world_spec: WorldSpec,
     pub worlds: Vec<IcyWorld>,
     pub subroutines: Subroutines,
     pub core_crack: CoreCrack,

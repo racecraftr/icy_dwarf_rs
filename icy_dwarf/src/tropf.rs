@@ -1,5 +1,12 @@
 use faer::{
-    col::generic::Col, prelude::Solve, sparse::{Triplet, csc_numeric::generic::SparseColMat, linalg::solvers::{Lu, SymbolicLu}}
+    Mat,
+    col::generic::Col,
+    prelude::Solve,
+    sparse::{
+        Triplet,
+        csc_numeric::generic::SparseColMat,
+        linalg::solvers::{Lu, SymbolicLu},
+    },
 };
 use num::complex::{Complex64, ComplexFloat};
 
@@ -42,10 +49,10 @@ fn ratio_factorials(n: usize, s: usize) -> f64 {
     ((n - s + 1)..(n + s)).product::<usize>() as f64
 }
 
-/// uses the [`saer`] library to perform the Bi-conjugate Gradient Stabilized 
-/// method on a matrix to solve the equation Ax = b. 
-/// Much of the work is done in conversion and setup, 
-/// but the actual map is being done by 
+/// uses the [`saer`] library to perform the Bi-conjugate Gradient Stabilized
+/// method on a matrix to solve the equation Ax = b.
+/// Much of the work is done in conversion and setup,
+/// but the actual map is being done by
 fn bicgstab(a: &Vec<Vec<Complex64>>, b: &Vec<Complex64>) -> Vec<Complex64> {
     let rows = a.len();
     let cols = a[0].len();
@@ -71,3 +78,13 @@ fn bicgstab(a: &Vec<Vec<Complex64>>, b: &Vec<Complex64>) -> Vec<Complex64> {
 
     x.iter().cloned().collect::<Vec<_>>()
 }
+
+/// Finds the complex eigenvalues of a real matrix.
+fn eigen(mtx: &Vec<Vec<f64>>) -> Option<Vec<Complex64>> {
+    let rows = mtx.len();
+    let cols = mtx[0].len();
+
+    let mat = Mat::from_fn(rows, cols, |i, j| mtx[i][j]);
+    mat.eigenvalues().ok() // that's it, really
+}
+
