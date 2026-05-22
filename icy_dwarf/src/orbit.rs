@@ -37,13 +37,22 @@ pub fn d_laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
 }
 
 pub fn d2_laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
-    todo!(); //TODO: translate the code 
-    // let mut d2b_lap_j = j * (j - 1.);
-    // let mut temp = 1.;
-    // for m in 0..200 {
-    //     let m = m as f64;
-    //     temp = temp * (s + m) / (1.0 + m) * (s + j + m) / (j + 1. + m) * alpha.powi(2);
-    //     d2b_lap_j += temp * ((j + m + 1.) * 2. - 1.) * ((j + m + 1.) * 2. - 1.);
-    // }
-    // d2b_lap_j
+    let mut d2b_lapj = j * (j - 1.);
+    let mut temp = 0.;
+
+    for m in 0..200 {
+        let m = m as f64;
+        temp *= (s + m) / (1. + m) * (s + j + m) / (j + 1. + m) * alpha.powi(2);
+        let incr = temp + (j + 2. * (m + 1.)) * (j + 2. * (m + 1.) - 1.);
+        d2b_lapj += incr;
+        if incr < 1.0e-6 {
+            break;
+        }
+    }
+    d2b_lapj *= alpha.powf(j - 2.);
+    for m in 0..j as i32 {
+        let m = m as f64;
+        d2b_lapj *= (s + m) / (m + 1.);
+    }
+    d2b_lapj * 2.
 }

@@ -1,8 +1,11 @@
+use crate::input::ParsedInput;
+
+mod cryolava;
 mod input;
+mod orbit;
 mod planet_system;
 mod thermal;
 mod tropf;
-mod orbit;
 
 #[allow(dead_code)]
 pub mod consts {
@@ -86,58 +89,58 @@ pub mod consts {
     // -----------------------------------------------------------------
 
     /// Heat of hydration, erg/(g forsterite)
-    pub const HHYDR: f64 = 5.75e9; 
+    pub const HHYDR: f64 = 5.75e9;
     /// Heat capacity of rock below 275 K (cgs)
-    pub const EROCK_A: f64 = 1.40e4; 
+    pub const EROCK_A: f64 = 1.40e4;
     /// Heat capacity of rock 275–1000 K, term 1 (cgs)
-    pub const EROCK_C: f64 = 6.885e6; 
+    pub const EROCK_C: f64 = 6.885e6;
     /// Heat capacity of rock 275–1000 K, term 2 (cgs)
-    pub const EROCK_D: f64 = 2.963636e3; 
+    pub const EROCK_D: f64 = 2.963636e3;
     /// Heat capacity of rock above 1000 K (cgs)
-    pub const EROCK_F: f64 = 1.20e7; 
+    pub const EROCK_F: f64 = 1.20e7;
 
     /// Heat capacity of water ice (erg/g/K)
-    pub const QH2O: f64 = 7.73e4; 
+    pub const QH2O: f64 = 7.73e4;
     /// Heat capacity of ADH ice (erg/g/K)
-    pub const QADH: f64 = 1.12e5; 
+    pub const QADH: f64 = 1.12e5;
     /// Heat capacity of liquid water (erg/g/K)
-    pub const CH2OL: f64 = 4.1885e7; 
+    pub const CH2OL: f64 = 4.1885e7;
     /// Heat capacity of liquid ammonia (cgs)
-    pub const CNH3L: f64 = 4.7e7; 
+    pub const CNH3L: f64 = 4.7e7;
     /// Latent heat of ADH melting (cgs)
-    pub const LADH: f64 = 1.319e9; 
+    pub const LADH: f64 = 1.319e9;
     /// Latent heat of H2O melting (cgs)
-    pub const LH2O: f64 = 3.335e9; 
+    pub const LH2O: f64 = 3.335e9;
     /// Bulk permeability for D=1m cracks (m²)
-    pub const PERMEABILITY: f64 = 1.0e-9; 
+    pub const PERMEABILITY: f64 = 1.0e-9;
     /// Porosity from cracking (dimensionless)
-    pub const CRACK_POROSITY: f64 = 0.01; 
+    pub const CRACK_POROSITY: f64 = 0.01;
     /// Temperature at which differentiation proceeds (K)
-    pub const TDIFF: f64 = 140.0; 
+    pub const TDIFF: f64 = 140.0;
     /// Temperature of full silicate hydration (K)
-    pub const TDEHYDR_MIN: f64 = 700.0; 
+    pub const TDEHYDR_MIN: f64 = 700.0;
     /// Temperature of full silicate dehydration (K)
-    pub const TDEHYDR_MAX: f64 = 850.0; 
+    pub const TDEHYDR_MAX: f64 = 850.0;
     /// Effective thermal conductivity, hydrothermal layer (cgs)
-    pub const KAP_HYDRO: f64 = 100.0e5; 
+    pub const KAP_HYDRO: f64 = 100.0e5;
     /// Effective thermal conductivity, convective slush (cgs)
     pub const KAP_SLUSH: f64 = 400.0e5;
-    /// Effective thermal conductivity, convective ice (cgs) 
-    pub const KAP_ICE_CV: f64 = 150.0e5; 
+    /// Effective thermal conductivity, convective ice (cgs)
+    pub const KAP_ICE_CV: f64 = 150.0e5;
     /// Thermal conductivity, dry silicate rock (cgs)
-    pub const KAPROCK: f64 = 4.2e5; 
+    pub const KAPROCK: f64 = 4.2e5;
     /// Thermal conductivity, hydrated silicate rock (cgs)
-    pub const KAPHYDR: f64 = 1.0e5; 
+    pub const KAPHYDR: f64 = 1.0e5;
     /// Thermal conductivity of ADH ice (cgs)
-    pub const KAPADHS: f64 = 1.2e5; 
+    pub const KAPADHS: f64 = 1.2e5;
     /// Thermal conductivity of liquid water (cgs)    
-    pub const KAPH2OL: f64 = 0.61e5; 
+    pub const KAPH2OL: f64 = 0.61e5;
     /// Thermal conductivity of liquid ammonia (cgs)
-    pub const KAPNH3L: f64 = 0.022e5; 
+    pub const KAPNH3L: f64 = 0.022e5;
     /// Average expansivity of water (K⁻¹)
-    pub const ALFH2OAVG: f64 = 1.0e-3; 
+    pub const ALFH2OAVG: f64 = 1.0e-3;
     /// Memory of old hydration state (0=none, 1=no change)
-    pub const F_MEM: f64 = 0.75; 
+    pub const F_MEM: f64 = 0.75;
 
     // -----------------------------------------------------------------
     // CRACKING PARAMETERS
@@ -230,9 +233,9 @@ pub mod consts {
     // ORBITAL EVOLUTION PARAMETERS
     // -----------------------------------------------------------------
     /// Max order to look for resonances
-    pub const IJMAX: i32 = 5; 
+    pub const IJMAX: i32 = 5;
     /// Minimum eccentricity
-    pub const MIN_ECC: f64 = 1.0e-4; 
+    pub const MIN_ECC: f64 = 1.0e-4;
 }
 
 #[allow(dead_code)]

@@ -28,7 +28,7 @@ pub fn tropf(
     s: i32,
     pn_fsf: f64,
     kn_fsf: C,
-    kLovenF: C,
+    k_loven_f: C,
 ) {
     let til_omega = C::from(1.0);
 }
@@ -87,4 +87,3 @@ fn eigen(mtx: &Vec<Vec<f64>>) -> Option<Vec<Complex64>> {
     let mat = Mat::from_fn(rows, cols, |i, j| mtx[i][j]);
     mat.eigenvalues().ok() // that's it, really
 }
-

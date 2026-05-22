@@ -1,5 +1,9 @@
-use faer::{Mat, linalg::solvers::{DenseSolveCore, Svd}, prelude::Solve};
-use num::{complex::Complex64};
+use faer::{
+    Mat,
+    linalg::solvers::{DenseSolveCore, Svd},
+    prelude::Solve,
+};
+use num::complex::Complex64;
 
 use crate::{
     consts::{EROCK_A, EROCK_C, EROCK_D, EROCK_F},
@@ -9,6 +13,13 @@ use crate::{
 impl ParsedInput {
     pub fn thermal() {
         let tilt_scale: f64 = 1.0;
+    }
+
+    fn tide(&self) {
+        let nr = self.grid.n_zones;
+        let mut mean_layer_densities = vec![0.0; nr];
+        let mut layer_masses = vec![0.0; nr];
+        let mut y_tide = vec![vec![Complex64::from(0.0); 6]; nr];
     }
 }
 
@@ -24,27 +35,28 @@ fn heat_rock(T: f64) -> f64 {
     }
 }
 
-fn svd(mat: &Vec<Vec<f64>>) -> Option<Svd<f64>>{
+fn svd(mat: &Vec<Vec<f64>>) -> Option<Svd<f64>> {
     let rows = mat.len();
     let cols = mat[0].len();
-    Mat::from_fn(
-        rows, cols, |i, j| mat[i][j])
-    .svd().ok()
+    Mat::from_fn(rows, cols, |i, j| mat[i][j]).svd().ok()
 }
 
-/// Gauss jordan elimination on a complex matrix. 
-/// Given a matrix and a vector, 
+/// Gauss jordan elimination on a complex matrix.
+/// Given a matrix and a vector,
 /// Uses full pivoting to solve Ax = b.
-/// Returns both x and the inverse of A. 
-fn gauss_jordan(mat: &Vec<Vec<Complex64>>, b: &Vec<Complex64>) -> Option<(Mat<Complex64>, Mat<Complex64>)> {
+/// Returns both x and the inverse of A.
+fn gauss_jordan(
+    mat: &Vec<Vec<Complex64>>,
+    b: &Vec<Complex64>,
+) -> Option<(Mat<Complex64>, Mat<Complex64>)> {
     let rows = mat.len();
     let cols = mat[0].len();
     if rows != cols || b.len() != cols {
         return None; // avoids unneccessary computation 
     }
-    let A = Mat::from_fn(
-        rows, cols, |i, j| mat[i][j]);
-    if A.determinant() == Complex64::from(0.0) { // matrix is not invertible
+    let A = Mat::from_fn(rows, cols, |i, j| mat[i][j]);
+    if A.determinant() == Complex64::from(0.0) {
+        // matrix is not invertible
         return None;
     }
     let b = Mat::from_fn(b.len(), 1, |i, _| b[i]);
@@ -53,8 +65,6 @@ fn gauss_jordan(mat: &Vec<Vec<Complex64>>, b: &Vec<Complex64>) -> Option<(Mat<Co
     let a_inv = lu.inverse();
     Some((x, a_inv))
 }
-
-
 
 #[cfg(test)]
 mod test {
@@ -73,6 +83,6 @@ mod test {
         };
         println!("S = {:?}", svd.S()); // S represents Sigma (the diagonal entries)
         println!("U = {:?}", svd.U()); // U represents U
-        println!("V = {:?}", svd.V().transpose()); // V represents (V^*)^*
+        println!("V = {:?}", svd.V().conjugate()); // V represents (V^*)^*
     }
 }

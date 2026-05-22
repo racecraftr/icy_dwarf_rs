@@ -2,6 +2,7 @@ use std::{
     fs::{self, File},
     io::{self, BufRead},
     path::Path,
+    str::Lines,
 };
 
 use serde::Deserialize;
@@ -50,6 +51,12 @@ pub struct Grid {
     pub speedup: f64,
     pub time_total: f64,
     pub output_every: f64,
+}
+
+impl Grid {
+    pub fn output_time_step(&self) -> usize {
+        (self.time_total / self.output_every) as usize
+    }
 }
 
 #[derive(Default, Debug, Clone, Deserialize)]
@@ -168,7 +175,7 @@ pub struct SubroutinesGeo {
 
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct SubroutinesCryo {
-    pub after: f64,
+    pub after: i32,
     pub min_temp_chnosz: f64,
 }
 
@@ -196,6 +203,16 @@ pub struct ParsedInput {
     pub core_crack: CoreCrack,
 }
 
+impl ParsedInput {
+    fn x_hydr(&self) -> Vec<f64> {
+        self.worlds.iter().map(|w| w.hydr_init).collect()
+    }
+
+    pub fn t_cryo(&self) -> i32 {
+        self.subroutines.cryo.after / (self.grid.output_every as i32)
+    }
+}
+
 /// parses a .toml file to a [`ParsedInput`].
 /// [TOML](https://toml.io/) is a configuration file format, which can be used
 /// to also define the inputs for IcyDwarf. It is both human and machine-readable,
@@ -213,6 +230,64 @@ pub fn parse_toml(toml_path: &str) -> Option<ParsedInput> {
     toml::from_str(&toml_str).ok()
 }
 
+pub struct ThermalOut {
+    pub radius_km: f64,
+    pub temp_kelvin: f64,
+    pub mass_rock: f64,
+    pub mass_ice: f64,
+    pub mass_ammonia_solid: f64,
+    pub mass_water: f64,
+    pub mass_ammonia_liquid: f64,
+    pub nusselt_num: f64,
+    pub ice_frac_amorphous: f64,
+    pub thermal_cond: f64,
+    pub deg_of_hydr: f64,
+    pub porosity: f64,
+    pub crack: bool,
+    pub tidal_heating_rate: f64,
+}
+
+impl ThermalOut {
+    fn from_line(ln: &str) -> Option<Self> {
+        let parts = ln.trim().split_whitespace().collect::<Vec<_>>();
+        Some(Self {
+            radius_km: parts[0].parse().ok()?,
+            temp_kelvin: parts[1].parse().ok()?,
+            mass_rock: parts[2].parse().ok()?,
+            mass_ice: parts[3].parse().ok()?,
+            mass_ammonia_solid: parts[4].parse().ok()?,
+            mass_water: parts[5].parse().ok()?,
+            mass_ammonia_liquid: parts[6].parse().ok()?,
+            nusselt_num: parts[7].parse().ok()?,
+            ice_frac_amorphous: parts[8].parse().ok()?,
+            thermal_cond: parts[9].parse().ok()?,
+            deg_of_hydr: parts[10].parse().ok()?,
+            porosity: parts[11].parse().ok()?,
+            crack: parts[12].parse::<u8>().map(|n| n == 1).ok()?,
+            tidal_heating_rate: parts[13].parse().ok()?,
+        })
+    }
+}
+
+fn read_thermal_out(path: &str, output_time_step: usize) -> Option<Vec<Vec<ThermalOut>>> {
+    let Ok(lines) =
+        fs::read_to_string(path).map(|s| s.lines().map(str::to_owned).collect::<Vec<_>>())
+    else {
+        return None;
+    };
+    Some(
+        lines
+            .chunks(output_time_step) // we don't need to define NT
+            // as a pamaeter, as it is sized dynamically.
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .filter_map(|ln| ThermalOut::from_line(ln))
+                    .collect()
+            })
+            .collect(),
+    )
+}
 #[cfg(test)]
 mod test {
     use crate::input::parse_toml;

@@ -1,6 +1,6 @@
 [package]
 name = "icy_dwarf"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 
 [dependencies]
@@ -10,6 +10,7 @@ faer = "0.23"
 toml = "1.1.0+spec-1.1.0"
 nalgebra = "0.34.2"
 num = "0.4.3"
+clap = "4.6.1"
 
 [profile.dev.package.faer]
 opt-level = 3
