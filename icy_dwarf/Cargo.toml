@@ -10,7 +10,7 @@ faer = "0.23"
 toml = "1.1.0+spec-1.1.0"
 nalgebra = "0.34.2"
 num = "0.4.3"
-clap = "4.6.1"
+clap = { version = "4.6.1", features = ["derive"] }
 
 [profile.dev.package.faer]
 opt-level = 3
