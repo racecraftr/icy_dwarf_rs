@@ -43,8 +43,8 @@ lookup_tbl = [
 # A parser can then count the number of moons.
 [[worlds]]
 name = "Rhea"
-r_p = 762.2
-rho_p = 1.267
+planetary_rad = 762.2
+planetary_dens = 1.267
 temp_surf = 72
 temp_init = 270
 t_form = 4000
@@ -93,7 +93,7 @@ after = 2500
 min_temp_chnosz = 273
 
 [core_crack]
-incl_mismatch = true
+incl_therm_mismatch = true
 incl_pore = true
 incl_hydr = false
 incl_dissol = false

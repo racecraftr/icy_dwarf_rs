@@ -1,12 +1,9 @@
-use std::{
-    fs::{self, File},
-    io::{self, BufRead},
-    path::Path,
-    str::Lines,
-};
+use std::fs::{self};
 
 use serde::Deserialize;
 use serde_repr::Deserialize_repr;
+
+use crate::consts::{GRAM, PI_GREEK, RHO_ADHS, XC};
 
 #[repr(u8)]
 #[derive(Default, Debug, Clone, Deserialize_repr)]
@@ -119,8 +116,8 @@ pub struct WorldSpec {
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct IcyWorld {
     pub name: String,
-    pub r_p: f64,
-    pub rho_p: f64,
+    pub planetary_rad: f64,
+    pub planetary_dens: f64,
     pub temp_surf: f64,
     pub temp_init: f64,
     pub t_form: f64,
@@ -142,6 +139,18 @@ pub struct IcyWorld {
     pub t_reslock: f64,
 }
 
+const RHO_ADHS_TH: f64 = RHO_ADHS * GRAM;
+
+impl IcyWorld {
+    pub fn mass(&self) -> f64 {
+        self.planetary_dens * 4.0 / 3.0 * PI_GREEK * self.planetary_rad.powi(3)
+    }
+
+    pub fn rho_ice(&self) -> f64 {
+        1.0 / (self.ammonia / XC) / (RHO_ADHS * GRAM)
+    }
+}
+
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct CoreCrackDissol {
     pub of_silica: bool,
@@ -151,7 +160,7 @@ pub struct CoreCrackDissol {
 
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct CoreCrack {
-    pub incl_mismatch: bool,
+    pub incl_therm_mismatch: bool,
     pub incl_pore: bool,
     pub incl_hydr: bool,
     pub incl_dissol: bool,
