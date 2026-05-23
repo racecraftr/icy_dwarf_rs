@@ -11,7 +11,7 @@ use crate::{
 };
 
 impl ParsedInput {
-    pub fn thermal() {
+    pub fn thermal(&self) {
         let tilt_scale: f64 = 1.0;
     }
 

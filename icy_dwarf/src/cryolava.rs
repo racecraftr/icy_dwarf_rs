@@ -7,7 +7,7 @@ pub const N_SPECIES: i32 = 10;
 
 impl ParsedInput {
     pub fn cryolava(&self, thermal_out: &Vec<Vec<ThermalOut>>) {
-        let r_p = self.worlds[0].r_p;
+        let r_p = self.worlds[0].planetary_rad;
         let t = self.t_cryo();
         let chnoz_t_min = self.subroutines.cryo.min_temp_chnosz;
         let rho_dry = self.world_spec.rho_rock_dry;
