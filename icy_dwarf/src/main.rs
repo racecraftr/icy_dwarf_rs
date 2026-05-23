@@ -1,5 +1,4 @@
-use crate::input::ParsedInput;
-
+mod crack;
 mod cryolava;
 mod input;
 mod orbit;
@@ -7,11 +6,24 @@ mod planet_system;
 mod thermal;
 mod tropf;
 
+use std::{
+    fs::{self, File},
+    io, os,
+    path::{Path, PathBuf},
+    process::exit,
+};
+
+use clap::Parser;
+
+use crate::input::parse_toml;
+
 #[allow(dead_code)]
 pub mod consts {
     // -----------------------------------------------------------------
     // PHYSICAL AND MATHEMATICAL CONSTANTS
     // -----------------------------------------------------------------
+
+    use core::f64;
 
     /// Gravitational constant (SI)
     pub const G: f64 = 6.67e-11;
@@ -26,7 +38,7 @@ pub mod consts {
     pub const K_B: f64 = 1.3806502e-23;
 
     /// Ratio of the circumference of a circle to its radius
-    pub const PI_GREEK: f64 = 3.14159265358979323846;
+    pub const PI_GREEK: f64 = f64::consts::PI; // rust has a pretty good pi const built in 
 
     /// Mass of the Earth (kg)
     pub const M_EARTH: f64 = 5.9721986e24;
@@ -238,20 +250,35 @@ pub mod consts {
     pub const MIN_ECC: f64 = 1.0e-4;
 }
 
-#[allow(dead_code)]
-pub struct Thermalout {
-    radius: f64,
-    temp_k: f64,
-    m_rock: f64,
-    m_h2os: f64,
-    m_nh31: f64,
-    nu: f64,
-    famor: f64,
-    kappa: f64,
-    xhydr: f64,
-    pore: f64,
-    crack: f64,
-    w_tide: f64,
+#[derive(Parser)]
+struct Args {
+    /// The path to the IcyDwarf input.
+    pub input_path: String,
+
+    /// The path to the Thermal output file.
+    #[arg(short, long, value_name = "FILE")]
+    pub thout: Option<String>,
 }
 
-fn main() {}
+fn main() {
+    let args = Args::parse();
+    let Some(input) = parse_toml(&args.input_path) else {
+        eprintln!("Could not parse/find file {}", &args.input_path);
+        exit(1);
+    };
+}
+
+pub fn create_output(output_path: Option<String>, file_name: String) -> Result<(), String> {
+    let output_path = output_path.unwrap_or("Outputs/".to_owned());
+    fs::create_dir(&output_path);
+    let file_path = PathBuf::from(&output_path).join(file_name);
+    if fs::exists(&file_path).unwrap_or_default() {
+        let Ok(_) = File::create(&file_path) else {
+            return Err(format!(
+                "Unable to create file {}",
+                file_path.to_str().unwrap_or_default()
+            ));
+        };
+    }
+    Ok(())
+}
