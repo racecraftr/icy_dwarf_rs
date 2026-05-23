@@ -8,7 +8,8 @@ use faer::{
         linalg::solvers::{Lu, SymbolicLu},
     },
 };
-use num::complex::{Complex64, ComplexFloat};
+use nalgebra::ComplexField;
+use num::complex::Complex64;
 
 #[repr(u8)]
 pub enum DissType {
@@ -18,20 +19,6 @@ pub enum DissType {
 }
 
 type C = Complex64;
-
-pub fn tropf(
-    tilceq: f64,
-    til_T: f64,
-    diss_type: DissType,
-    til_om: C,
-    nF: i32,
-    s: i32,
-    pn_fsf: f64,
-    kn_fsf: C,
-    k_loven_f: C,
-) {
-    let til_omega = C::from(1.0);
-}
 
 fn dot_prod(v1: &[C], v2: &[C]) -> C {
     v1.iter().zip(v2.iter()).map(|(v1, v2)| v1 * v2).sum()
@@ -86,4 +73,19 @@ fn eigen(mtx: &Vec<Vec<f64>>) -> Option<Vec<Complex64>> {
 
     let mat = Mat::from_fn(rows, cols, |i, j| mtx[i][j]);
     mat.eigenvalues().ok() // that's it, really
+}
+
+fn globe_time_average(s_coefs: &[C], t_coefs: &[C], s: i32, n_vec: &[i32]) -> Vec<f64> {
+    (0..s_coefs.len())
+        .map(|i| {
+            let sc = s_coefs[i];
+            let tc = t_coefs[i];
+            let sc_c = sc.conj();
+            let tc_c = tc.conj();
+            let n = n_vec[i];
+
+            (sc * tc_c + sc_c * tc).real() / (2. * n as f64 + 1.)
+                * ratio_factorials(n as usize, s as usize)
+        })
+        .collect()
 }
