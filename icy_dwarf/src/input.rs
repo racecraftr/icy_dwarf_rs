@@ -2,8 +2,7 @@ use std::fs::{self};
 
 use serde::Deserialize;
 use serde_repr::Deserialize_repr;
-
-use crate::consts::{GRAM, PI_GREEK, RHO_ADHS, XC};
+pub mod recover;
 
 #[repr(u8)]
 #[derive(Default, Debug, Clone, Deserialize_repr)]
@@ -60,7 +59,7 @@ impl Grid {
 pub struct TidalQ {
     pub init: f64,
     pub today: f64,
-    pub model: TidalModel,
+    pub mode: QMode,
 }
 
 #[derive(Default, Debug, Clone, Deserialize)]
@@ -139,18 +138,6 @@ pub struct IcyWorld {
     pub t_reslock: f64,
 }
 
-const RHO_ADHS_TH: f64 = RHO_ADHS * GRAM;
-
-impl IcyWorld {
-    pub fn mass(&self) -> f64 {
-        self.planetary_dens * 4.0 / 3.0 * PI_GREEK * self.planetary_rad.powi(3)
-    }
-
-    pub fn rho_ice(&self) -> f64 {
-        1.0 / (self.ammonia / XC) / (RHO_ADHS * GRAM)
-    }
-}
-
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct CoreCrackDissol {
     pub of_silica: bool,
@@ -202,7 +189,7 @@ pub struct Subroutines {
 }
 
 #[derive(Default, Debug, Clone, Deserialize)]
-pub struct ParsedInput {
+pub struct IcyDwarfInput {
     pub housekeeping: Housekeeping,
     pub grid: Grid,
     pub saturn: Saturn,
@@ -212,9 +199,14 @@ pub struct ParsedInput {
     pub core_crack: CoreCrack,
 }
 
-impl ParsedInput {
-    fn x_hydr(&self) -> Vec<f64> {
-        self.worlds.iter().map(|w| w.hydr_init).collect()
+impl IcyDwarfInput {
+    pub fn x_hydr(&self) -> Vec<Vec<f64>> {
+        // we probably won't need this function (based on what I see in the code), but it's there
+        // just in case.
+        self.worlds
+            .iter()
+            .map(|w| vec![w.hydr_init; self.grid.n_zones])
+            .collect()
     }
 
     pub fn t_cryo(&self) -> i32 {
@@ -227,7 +219,7 @@ impl ParsedInput {
 /// to also define the inputs for IcyDwarf. It is both human and machine-readable,
 /// and follows the v25.x format very closely.
 /// See inputs/input.toml for an example.
-pub fn parse_toml(toml_path: &str) -> Option<ParsedInput> {
+pub fn parse_toml(toml_path: &str) -> Option<IcyDwarfInput> {
     if !toml_path.ends_with(".toml") {
         println!("WARNING: File {} does not end with .toml", toml_path);
     }
