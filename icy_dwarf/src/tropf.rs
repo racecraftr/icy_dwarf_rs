@@ -11,6 +11,12 @@ use faer::{
 use nalgebra::ComplexField;
 use num::complex::Complex64;
 
+use crate::input::IcyDwarfInput;
+
+impl IcyDwarfInput {
+    pub fn tropf(&self) {}
+}
+
 #[repr(u8)]
 pub enum DissType {
     Kinetic,
@@ -20,17 +26,17 @@ pub enum DissType {
 
 type C = Complex64;
 
-fn dot_prod(v1: &[C], v2: &[C]) -> C {
-    v1.iter().zip(v2.iter()).map(|(v1, v2)| v1 * v2).sum()
-}
-
-fn vec_norm(v: &[C]) -> f64 {
-    v.iter()
-        .map(|c| c * c.conj())
-        .sum::<Complex64>()
-        .abs()
-        .sqrt()
-}
+// fn dot_prod(v1: &[C], v2: &[C]) -> C {
+//     v1.iter().zip(v2.iter()).map(|(v1, v2)| v1 * v2).sum()
+// }
+//
+// fn vec_norm(v: &[C]) -> f64 {
+//     v.iter()
+//         .map(|c| c * c.conj())
+//         .sum::<Complex64>()
+//         .abs()
+//         .sqrt()
+// }
 
 fn ratio_factorials(n: usize, s: usize) -> f64 {
     ((n - s + 1)..(n + s)).product::<usize>() as f64
