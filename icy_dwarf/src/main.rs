@@ -8,8 +8,7 @@ mod tropf;
 
 use std::{
     fs::{self, File},
-    io, os,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::exit,
 };
 
@@ -270,7 +269,9 @@ fn main() {
 
 pub fn create_output(output_path: Option<String>, file_name: String) -> Result<(), String> {
     let output_path = output_path.unwrap_or("Outputs/".to_owned());
-    fs::create_dir(&output_path);
+    let Ok(_) = fs::create_dir(&output_path) else {
+        return Err(format!("Unable to create output folder at {}", output_path));
+    };
     let file_path = PathBuf::from(&output_path).join(file_name);
     if fs::exists(&file_path).unwrap_or_default() {
         let Ok(_) = File::create(&file_path) else {
