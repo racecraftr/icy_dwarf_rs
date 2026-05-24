@@ -1,11 +1,11 @@
 use crate::{
     consts::GRAM,
-    input::{ParsedInput, ThermalOut},
+    input::{IcyDwarfInput, ThermalOut},
 };
 
 pub const N_SPECIES: i32 = 10;
 
-impl ParsedInput {
+impl IcyDwarfInput {
     pub fn cryolava(&self, thermal_out: &Vec<Vec<ThermalOut>>) {
         let r_p = self.worlds[0].planetary_rad;
         let t = self.t_cryo();
