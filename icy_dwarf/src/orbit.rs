@@ -1,3 +1,7 @@
+use crate::input::IcyDwarfInput;
+
+impl IcyDwarfInput {}
+
 pub fn laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
     let mut b_lap_j = 1_f64;
     let mut temp = 1_f64;
@@ -55,4 +59,8 @@ pub fn d2_laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
         d2b_lapj *= (s + m) / (m + 1.);
     }
     d2b_lapj * 2.
+}
+
+pub fn mmr_avg_ham() -> [f64; 5] {
+    todo!()
 }

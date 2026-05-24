@@ -7,10 +7,10 @@ use num::complex::Complex64;
 
 use crate::{
     consts::{EROCK_A, EROCK_C, EROCK_D, EROCK_F},
-    input::ParsedInput,
+    input::IcyDwarfInput,
 };
 
-impl ParsedInput {
+impl IcyDwarfInput {
     pub fn thermal(&self) {
         let tilt_scale: f64 = 1.0;
     }
@@ -21,6 +21,8 @@ impl ParsedInput {
         let mut layer_masses = vec![0.0; nr];
         let mut y_tide = vec![vec![Complex64::from(0.0); 6]; nr];
     }
+
+    fn hydrate(&self) {}
 }
 
 fn heat_rock(T: f64) -> f64 {
