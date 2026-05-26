@@ -1,7 +1,4 @@
-use crate::{
-    consts::GRAM,
-    input::{IcyDwarfInput, ThermalOut},
-};
+use crate::{consts::GRAM, input::IcyDwarfInput, thermal::ThermalOut};
 
 pub const N_SPECIES: i32 = 10;
 
