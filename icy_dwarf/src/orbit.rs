@@ -1,6 +1,35 @@
-use crate::input::IcyDwarfInput;
+use num::Signed;
 
-impl IcyDwarfInput {}
+use crate::{consts::MYR2SEC, input::IcyDwarfInput, planet_system::WorldState};
+
+const ORB_D_TIME: f64 = 5.0e-4 * 1.0e-6 * MYR2SEC;
+
+impl IcyDwarfInput {
+    pub fn orbit(
+        &self,
+        world_idx: usize,
+        world_states: &mut [WorldState],
+        d_time: f64,
+        real_time: f64,
+        q_prim: f64,
+    ) {
+        let current_world_state = &mut world_states[world_idx];
+        let mut res_orbit_evol = current_world_state.res_acct_for[world_idx..]
+            .iter()
+            .any(|&n| n > 0.);
+
+        let nv = 6;
+        let n_param_orbit = 30;
+
+        for i in 0..world_idx {
+            if current_world_state.res_acct_for[i] > 0. {
+                res_orbit_evol = true;
+                let j = current_world_state.res_acct_for[i] + 1.;
+            }
+        }
+    }
+    pub fn res_check(world_state: &mut WorldState) {}
+}
 
 pub fn laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
     let mut b_lap_j = 1_f64;
@@ -64,3 +93,5 @@ pub fn d2_laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
 pub fn mmr_avg_ham() -> [f64; 5] {
     todo!()
 }
+
+pub struct OrbitOut {}
