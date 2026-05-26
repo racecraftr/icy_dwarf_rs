@@ -204,7 +204,7 @@ pub mod consts {
     pub const INT_SIZE: i32 = 1000;
 
     /// Size of square a(deltaT,P) table
-    pub const SIZEATP: i32 = 100;
+    pub const SIZEA_TP: usize = 100;
 
     /// deltaT intervals for a(deltaT,P) (K)
     pub const DELTA_T_STEP: f64 = 20.0;
@@ -267,19 +267,33 @@ fn main() {
     };
 }
 
+pub fn heat_rock(t: f64) -> f64 {
+    if t > 1000.0 {
+        consts::EROCK_A * 275.0 * 275.0
+            + (1000.0 - 275.0) * (consts::EROCK_C + consts::EROCK_D * 1000.0)
+            + (consts::EROCK_F) * (t - 1000.0)
+    } else if t > 275.0 {
+        consts::EROCK_A * 275.0 * 275.0 + (t - 275.0) * (consts::EROCK_C + consts::EROCK_C * t)
+    } else {
+        consts::EROCK_A * t * t
+    }
+}
+
 pub fn create_output(output_path: Option<String>, file_name: String) -> Result<(), String> {
     let output_path = output_path.unwrap_or("Outputs/".to_owned());
-    let Ok(_) = fs::create_dir(&output_path) else {
-        return Err(format!("Unable to create output folder at {}", output_path));
-    };
+    if let Err(e) = fs::create_dir_all(&output_path) {
+        return Err(format!(
+            "Unable to create output folder at {}: {}",
+            output_path, e
+        ));
+    }
     let file_path = PathBuf::from(&output_path).join(file_name);
-    if fs::exists(&file_path).unwrap_or_default() {
-        let Ok(_) = File::create(&file_path) else {
-            return Err(format!(
-                "Unable to create file {}",
-                file_path.to_str().unwrap_or_default()
-            ));
-        };
+    if let Err(e) = File::create(&file_path) {
+        return Err(format!(
+            "Unable to create file {}: {}",
+            file_path.to_str().unwrap_or_default(),
+            e
+        ));
     }
     Ok(())
 }
