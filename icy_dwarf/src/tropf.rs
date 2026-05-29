@@ -44,8 +44,6 @@ fn ratio_factorials(n: usize, s: usize) -> f64 {
 
 /// uses the [`saer`] library to perform the Bi-conjugate Gradient Stabilized
 /// method on a matrix to solve the equation Ax = b.
-/// Much of the work is done in conversion and setup,
-/// but the actual map is being done by
 fn bicgstab(a: &Vec<Vec<Complex64>>, b: &Vec<Complex64>) -> Vec<Complex64> {
     let rows = a.len();
     let cols = a[0].len();
@@ -94,4 +92,96 @@ fn globe_time_average(s_coefs: &[C], t_coefs: &[C], s: i32, n_vec: &[i32]) -> Ve
                 * ratio_factorials(n as usize, s as usize)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod eigen_tests {
+    use super::*;
+    #[test]
+    fn eigen_test_1() {
+        let diag_mtx = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, -2.0, 0.0],
+            vec![0.0, 0.0, 5.0],
+        ];
+        let Some(mut eigenvalues) = eigen(&diag_mtx) else {
+            panic!("Unable to find eigenvalues of matrix");
+        };
+        eigenvalues.sort_by(|a, b| a.abs().total_cmp(&b.abs()));
+        assert!(eigenvalues == vec![C::from(1.0), C::from(-2.0), C::from(5.0)])
+    }
+
+    #[test]
+    fn eigen_test_2() {
+        let diag_mtx = vec![
+            vec![1.0, 3.0, -4.0],
+            vec![0.0, -2.0, 9.5],
+            vec![0.0, 0.0, 5.0],
+        ];
+        let Some(mut eigenvalues) = eigen(&diag_mtx) else {
+            panic!("Unable to find eigenvalues of matrix");
+        };
+        eigenvalues.sort_by(|a, b| a.abs().total_cmp(&b.abs()));
+        assert!(eigenvalues == vec![C::from(1.0), C::from(-2.0), C::from(5.0)])
+    }
+
+    #[test]
+    fn eigen_test_3() {
+        // Block diagonal matrix with complex eigenvalues 1 +/- i and 2 +/- 3i
+        let complex_mtx = vec![
+            vec![1.0, -1.0, 0.0, 0.0],
+            vec![1.0, 1.0, 0.0, 0.0],
+            vec![0.0, 0.0, 2.0, -3.0],
+            vec![0.0, 0.0, 3.0, 2.0],
+        ];
+        let Some(mut eigenvalues) = eigen(&complex_mtx) else {
+            panic!("Unable to find eigenvalues of matrix");
+        };
+        // Sort by real part then imaginary part to ensure a deterministic order
+        eigenvalues.sort_by(|a, b| a.re.total_cmp(&b.re).then(a.im.total_cmp(&b.im)));
+        println!("eigenvalues are {:?}", &eigenvalues);
+        let targets = [
+            C::new(1.0, -1.0),
+            C::new(1.0, 1.0),
+            C::new(2.0, -3.0),
+            C::new(2.0, 3.0),
+        ];
+
+        // check mismatch by a small amount
+        for (a, b) in eigenvalues.iter().zip(targets.iter()) {
+            assert!(
+                (a.re - b.re).abs() < 1e-12,
+                "Real part mismatch: {:?} != {:?}",
+                a,
+                b
+            );
+            assert!(
+                (a.im - b.im).abs() < 1e-12,
+                "Imaginary part mismatch: {:?} != {:?}",
+                a,
+                b
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod bicgstab_tests {
+    use super::*;
+
+    #[test]
+    fn test() {
+        let a = [[2., 1., -1.], [-3., -1., 2.], [-2., 1., 2.]]
+            .iter()
+            .map(|v| v.iter().map(C::from).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let b = [-5., 9., 6.].iter().map(C::from).collect::<Vec<_>>();
+        let x = bicgstab(&a, &b);
+        println!("{:?}", &x);
+        let res = x
+            .iter()
+            .zip([1., -2., 5.])
+            .all(|(a, b)| (a.re - b).abs() < 1e-12);
+        assert!(res);
+    }
 }
