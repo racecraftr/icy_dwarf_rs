@@ -5,14 +5,18 @@ mod orbit;
 mod planet_system;
 mod thermal;
 mod tropf;
+mod water_rock;
 
 use std::{
     fs::{self, File},
+    ops::{Add, Div, Mul, Sub},
     path::PathBuf,
     process::exit,
 };
 
 use clap::Parser;
+use faer::mat::{Own, generic::Mat};
+use num::complex::Complex64;
 
 use crate::input::parse_toml;
 
@@ -254,28 +258,26 @@ struct Args {
     /// The path to the IcyDwarf input.
     pub input_path: String,
 
-    /// The path to the Thermal output file.
-    #[arg(short, long, value_name = "FILE")]
-    pub thout: Option<String>,
+    /// The path to the Output folder, in which the subroutines will write files.
+    /// By default, this will be set to the Output folder in the current working directory.
+    #[arg(short, long, value_name = "OUTPUT FOLDER")]
+    pub output_folder: Option<String>,
+
+    /// The path to the Data folder, in which inputs to subroutines will be read.
+    /// By default, this will bes set to the Data folder in the current working directory.
+    #[arg(short, long, value_name = "DATA FOLDER")]
+    pub data_path: Option<String>,
 }
 
 fn main() {
     let args = Args::parse();
     let Some(input) = parse_toml(&args.input_path) else {
-        eprintln!("Could not parse/find file {}", &args.input_path);
+        eprintln!("Could not parse/find input file {}", &args.input_path);
         exit(1);
     };
-}
-
-pub fn heat_rock(t: f64) -> f64 {
-    if t > 1000.0 {
-        consts::EROCK_A * 275.0 * 275.0
-            + (1000.0 - 275.0) * (consts::EROCK_C + consts::EROCK_D * 1000.0)
-            + (consts::EROCK_F) * (t - 1000.0)
-    } else if t > 275.0 {
-        consts::EROCK_A * 275.0 * 275.0 + (t - 275.0) * (consts::EROCK_C + consts::EROCK_C * t)
-    } else {
-        consts::EROCK_A * t * t
+    if input.subroutines.run_therm {
+        println!(">> Running thermal evolution code...");
+        input.planet_system(&args.output_folder);
     }
 }
 
@@ -296,4 +298,25 @@ pub fn create_output(output_path: Option<String>, file_name: String) -> Result<(
         ));
     }
     Ok(())
+}
+
+pub type FloatMat = Mat<Own<f64, usize, usize>>;
+pub type ComplexMat = Mat<Own<Complex64, usize, usize>>;
+
+pub fn to_faer_mat<T>(mat: &[Vec<T>]) -> Option<Mat<Own<T>>>
+where
+    T: Add + Sub + Mul + Div + PartialOrd + Clone,
+{
+    let rows = mat.len();
+    let cols = mat[0].len();
+    if !mat.iter().all(|v| v.len() == cols) {
+        return None;
+    }
+    let m = Mat::from_fn(rows, cols, |i, j| mat[i][j].clone());
+    todo!()
+}
+
+pub fn mat_as_complex(mat: &FloatMat) -> ComplexMat {
+    let (rows, cols) = mat.shape();
+    Mat::from_fn(rows, cols, |i, j| Complex64::from(mat[(i, j)]))
 }
