@@ -1,7 +1,9 @@
+use std::sync::LazyLock;
+
 use crate::{
     consts::*,
     create_output,
-    input::{IcyDwarfInput, IcyWorld, Saturn, TidalQ, WorldSpec},
+    input::{IcyDwarfInput, IcyWorld, PrimaryWorld, TidalQ, WorldSpec},
 };
 
 // pub fn planet_system(parsed: &ParsedInput) {
@@ -25,10 +27,10 @@ pub struct ZoneState {
     pub mass_total: f64, // usually d_m in most cases
     pub mass_rock: f64,
     pub mass_rock_init: f64,
-    pub mass_h2os: f64,
-    pub mass_adhs: f64,
-    pub mass_h2ol: f64,
-    pub mass_nh3l: f64,
+    pub mass_ice: f64,
+    pub mass_ammonia_solid: f64,
+    pub mass_water: f64,
+    pub mass_ammonia_liquid: f64,
     pub energy_total: f64,
     pub porosity: f64,
     pub pressure: f64,
@@ -36,6 +38,117 @@ pub struct ZoneState {
     pub x_hydr_old: f64,
     pub kappa: f64,
     pub nusselt: f64,
+}
+
+impl ZoneState {
+    pub fn fracs(&self) -> (f64, f64, f64, f64, f64) {
+        (
+            self.mass_rock / self.mass_total,
+            self.mass_ice / self.mass_total,
+            self.mass_ammonia_solid / self.mass_total,
+            self.mass_water / self.mass_total,
+            self.mass_ammonia_liquid / self.mass_total,
+        )
+    }
+
+    pub fn internal_energy(&self, t_init: f64) -> (f64, (f64, f64, f64)) {
+        let n = t_init.powi(2) * 0.5;
+        let energy_rock = self.mass_rock * heat_rock(t_init);
+        let energy_ice = self.mass_ice * QH2O * n;
+        let energy_slush = self.mass_ammonia_solid * n;
+        let sum = energy_rock + energy_ice + energy_slush;
+        (sum, (energy_rock, energy_ice, energy_slush))
+    }
+
+    /// Recalculates `temp` and phase distributions based on the current `energy_total`
+    pub fn apply_state(&mut self, x_salt: f64) -> Result<(), String> {
+        let specific_energy = self.energy_total / self.mass_total;
+        let (frock, mut fh2os, mut fadhs, mut fh2ol, mut fnh3l) = self.fracs();
+
+        let mut x = 0.0;
+        let mut gh2os = 0.0;
+        let mut gadhs = 0.0;
+        let mut gh2ol = 0.0;
+        let mut gnh3l = 0.0;
+
+        if frock < 1.0 {
+            gh2os = fh2os / (1.0 - frock);
+            gadhs = fadhs / (1.0 - frock);
+            gh2ol = fh2ol / (1.0 - frock);
+            gnh3l = fnh3l / (1.0 - frock);
+            x = gnh3l + XC * gadhs;
+        }
+
+        let mut t_lo = 20.0;
+        let mut t_hi = 5000.0;
+        let mut t_md = (t_lo + t_hi) / 2.0;
+
+        for _ in 0..30 {
+            // Calculate Elo
+            let tp = t_lo;
+            let erock_lo = heat_rock(tp);
+            let (eice_lo, ..) = heat_ice(tp, x, x_salt);
+            let elo = frock * erock_lo + (1.0 - frock) * eice_lo;
+
+            // Calculate Emd
+            let tp = t_md;
+            let erock_md = heat_rock(tp);
+            let (eice_md, gh2os_md, gadhs_md, gh2ol_md, gnh3l_md) = heat_ice(tp, x, x_salt);
+            let emd = frock * erock_md + (1.0 - frock) * eice_md;
+
+            // Calculate Ehi
+            let tp = t_hi;
+            let erock_hi = heat_rock(tp);
+            let (eice_hi, ..) = heat_ice(tp, x, x_salt);
+            let ehi = frock * erock_hi + (1.0 - frock) * eice_hi;
+
+            if specific_energy >= elo
+                && specific_energy <= ehi
+                && elo > 0.0
+                && ehi > 0.0
+                && emd > 0.0
+            {
+                if specific_energy <= emd {
+                    t_hi = t_md;
+                } else {
+                    t_lo = t_md;
+                }
+                t_md = (t_lo + t_hi) / 2.0;
+
+                // Keep updating fractions with the current midpoint
+                gh2os = gh2os_md;
+                gadhs = gadhs_md;
+                gh2ol = gh2ol_md;
+                gnh3l = gnh3l_md;
+            } else {
+                return Err(format!(
+                    "Could not compute temperature. Tlo={}, Thi={}, Tmd={}, Elo={}, Ehi={}, Emd={}, E={}",
+                    t_lo, t_hi, t_md, elo, ehi, emd, specific_energy
+                ));
+            }
+        }
+
+        self.temp = t_md;
+
+        if frock == 1.0 {
+            fh2os = 0.0;
+            fadhs = 0.0;
+            fh2ol = 0.0;
+            fnh3l = 0.0;
+        } else {
+            fh2os = (1.0 - frock) * gh2os;
+            fadhs = (1.0 - frock) * gadhs;
+            fh2ol = (1.0 - frock) * gh2ol;
+            fnh3l = (1.0 - frock) * gnh3l;
+        }
+
+        self.mass_ice = self.mass_total * fh2os;
+        self.mass_ammonia_solid = self.mass_total * fadhs;
+        self.mass_water = self.mass_total * fh2ol;
+        self.mass_ammonia_liquid = self.mass_total * fnh3l;
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -57,7 +170,7 @@ pub struct WorldState {
 }
 
 impl IcyDwarfInput {
-    pub fn planet_system(&self, output_path: Option<String>) {
+    pub fn planet_system(&self, output_path: &Option<String>) {
         let dtime = self.grid.time_step * 1.0e-6 * MYR2SEC;
         let n_time = (self.grid.time_total / self.grid.time_step) as usize;
         let n_steps = (self.grid.output_every / self.grid.time_step) as usize;
@@ -80,7 +193,7 @@ impl IcyDwarfInput {
                     let _ =
                         create_output(output_path.clone(), format!("{}_{}_{}.txt", idx, name, s));
                 }
-                if self.saturn.mass > 0.0 {
+                if self.primary_world.mass > 0.0 {
                     let _ =
                         create_output(output_path.clone(), format!("{}_{}_Orbit.txt", idx, name));
                 }
@@ -105,7 +218,7 @@ impl IcyDwarfInput {
                     let m_h2os = d_m * (1.0 - frock_pm) * (1.0 - world.ammonia / XC);
                     let m_adhs = d_m * (1.0 - frock_pm) * (world.ammonia / XC);
 
-                    let e_rock = m_rock * crate::heat_rock(world.temp_init);
+                    let e_rock = m_rock * heat_rock(world.temp_init);
                     let e_h2os = m_h2os * QH2O * world.temp_init * world.temp_init / 2.0;
                     let e_slush = m_adhs * QADH * world.temp_init * world.temp_init / 2.0;
                     let d_e = e_rock + e_h2os + e_slush;
@@ -118,10 +231,10 @@ impl IcyDwarfInput {
                         mass_total: d_m,
                         mass_rock: m_rock,
                         mass_rock_init: m_rock,
-                        mass_h2os: m_h2os,
-                        mass_adhs: m_adhs,
-                        mass_h2ol: 0.0,
-                        mass_nh3l: 0.0,
+                        mass_ice: m_h2os,
+                        mass_ammonia_solid: m_adhs,
+                        mass_water: 0.0,
+                        mass_ammonia_liquid: 0.0,
                         energy_total: d_e,
                         porosity: world.por_init,
                         pressure: 0.0,
@@ -134,7 +247,7 @@ impl IcyDwarfInput {
                 }
 
                 let n_orb = if world.orb_a_init > 0.0 {
-                    (GCGS * self.saturn.mass / world.orb_a_init.powi(3)).sqrt()
+                    (GCGS * self.primary_world.mass / world.orb_a_init.powi(3)).sqrt()
                 } else {
                     0.0
                 };
@@ -158,7 +271,7 @@ impl IcyDwarfInput {
             })
             .collect();
 
-        if self.saturn.mass > 0.0 {
+        if self.primary_world.mass > 0.0 {
             for s in [
                 "Primary",
                 "Resonances",
@@ -185,9 +298,10 @@ impl IcyDwarfInput {
 
         for _itime in 0..=n_time {
             real_time += dtime;
-            let _q_prim = self.saturn.tidal_q.q_prim(&self.worlds, real_time);
+            let _q_prim = self.primary_world.tidal_q.q_prim(&self.worlds, real_time);
 
-            // TODO: Call Orbit and Thermal logic
+            // Call Orbit and Thermal logic
+            self.thermal(&mut world_states, dtime);
         }
     }
 }
@@ -231,7 +345,7 @@ impl WorldSpec {
 }
 
 impl TidalQ {
-    pub fn q_prim(&self, planets: &Vec<IcyWorld>, real_time: f64) -> f64 {
+    pub fn q_prim(&self, planets: &[IcyWorld], real_time: f64) -> f64 {
         let t_form_min = planets.iter().fold(f64::MAX, |acc, e| acc.min(e.t_form));
         let scaling = (real_time - t_form_min) / (TODAY - t_form_min);
         match self.mode {
@@ -244,4 +358,125 @@ impl TidalQ {
             }
         }
     }
+}
+
+pub fn heat_rock(t: f64) -> f64 {
+    if t > 1000.0 {
+        EROCK_A * 275.0 * 275.0
+            + (1000.0 - 275.0) * (EROCK_C + EROCK_D * 1000.0)
+            + (EROCK_F) * (t - 1000.0)
+    } else if t > 275.0 {
+        EROCK_A * 275.0 * 275.0 + (t - 275.0) * (EROCK_C + EROCK_C * t)
+    } else {
+        EROCK_A * t * t
+    }
+}
+
+pub fn heat_ice(t: f64, x: f64, x_salt: f64) -> (f64, f64, f64, f64, f64) {
+    let xb = XC * (2.0 / 95.0_f64).sqrt();
+
+    // Determine transition temperatures based on concentration and salt content
+    let (t_low, t_mid, t_high) = match (x <= xb, x_salt > 0.0) {
+        (true, false) => (271.0, 273.0, 275.0),
+        (true, true) => (248.0, 250.0, 252.0),
+        (false, _) => {
+            let tl = 273.0 - 95.0 * (x / XC).powi(2);
+            (tl, 273.0, tl) // For x > xb, t_high = t_low = t_liq
+        }
+    };
+
+    // Precalculate boundary energies to simplify the piecewise energy function
+    let e_174 = 0.5 * QH2O * 174.0 * 174.0 + (x / XC) * 0.5 * (QADH - QH2O) * 174.0 * 174.0;
+    let e_178 = {
+        let t2 = 178.0;
+        e_174
+            + (1.0 - x / XC) * 0.5 * QH2O * (t2 * t2 - 174.0 * 174.0)
+            + (x / XC) * (t2 - 174.0) / 4.0
+                * (LADH
+                    + (182.0 - t2) / 2.0 * QADH * 174.0
+                    + XC * (t2 - 174.0) / 2.0 * CNH3L
+                    + (1.0 - XC) * (t2 - 174.0) / 2.0 * CH2OL)
+    };
+    let e_low = {
+        let r = ((t_mid - t_low) / 95.0).sqrt();
+        e_178
+            + 0.5 * QH2O * (t_low * t_low - 178.0 * 178.0)
+            + x * (CNH3L - CH2OL) * (t_low - 178.0)
+            + (x / XC)
+                * (1.0 - r)
+                * (LH2O / r + 2.0 * 95.0 * CH2OL - 2.0 * 95.0 * QH2O * t_mid
+                    + 2.0 * QH2O * 95.0 * 95.0 / 3.0 * (1.0 + r + r * r))
+    };
+    let e_high = if t_low < t_high {
+        e_low
+            + (t_high - t_low) * x * (CNH3L + CH2OL * (1.0 / xb - 1.0))
+            + (1.0 - x / xb) * (t_high - t_low) / 4.0 * (LH2O + 0.5 * CH2OL * (t_high - t_low))
+    } else {
+        e_low
+    };
+
+    // Helper function to calculate the specific internal energy e at a certain temperature t
+    let e = |tp: f64| -> f64 {
+        match tp {
+            tp if tp <= 174.0 => 0.5 * QH2O * tp * tp + (x / XC) * 0.5 * (QADH - QH2O) * tp * tp,
+            tp if tp <= 178.0 => {
+                e_174
+                    + (1.0 - x / XC) * 0.5 * QH2O * (tp * tp - 174.0 * 174.0)
+                    + (x / XC) * (tp - 174.0) / 4.0
+                        * (LADH
+                            + (182.0 - tp) / 2.0 * QADH * 174.0
+                            + XC * (tp - 174.0) / 2.0 * CNH3L
+                            + (1.0 - XC) * (tp - 174.0) / 2.0 * CH2OL)
+            }
+            tp if tp <= t_low => {
+                let r = ((t_mid - tp) / 95.0).sqrt();
+                e_178
+                    + 0.5 * QH2O * (tp * tp - 178.0 * 178.0)
+                    + x * (CNH3L - CH2OL) * (tp - 178.0)
+                    + (x / XC)
+                        * (1.0 - r)
+                        * (LH2O / r + 2.0 * 95.0 * CH2OL - 2.0 * 95.0 * QH2O * t_mid
+                            + 2.0 * QH2O * 95.0 * 95.0 / 3.0 * (1.0 + r + r * r))
+            }
+            tp if tp <= t_high && t_low < t_high => {
+                e_low
+                    + (tp - t_low) * x * (CNH3L + CH2OL * (1.0 / xb - 1.0))
+                    + (1.0 - x / xb) * (tp - t_low) / 4.0
+                        * (LH2O + 0.5 * CH2OL * (tp - t_low) + 0.5 * QH2O * t_low * (t_high - tp))
+            }
+            _ => e_high + (x * CNH3L + (1.0 - x) * CH2OL) * (tp - t_high),
+        }
+    };
+
+    let energy = e(t);
+
+    // Calculate phase fractions based on current temperature using match
+    let (gh2os, gadhs, gh2ol, gnh3l) = match t {
+        t if t <= 174.0 => (1.0 - x / XC, x / XC, 0.0, 0.0),
+        t if t <= 178.0 => {
+            let f = (t - 174.0) / 4.0;
+            (
+                1.0 - x / XC,
+                (x / XC) * (1.0 - f),
+                (x / XC) * f * (1.0 - XC),
+                (x / XC) * f * XC,
+            )
+        }
+        t if t <= t_low => {
+            let x_liq = XC * ((t_mid - t) / 95.0).sqrt();
+            (1.0 - x / x_liq, 0.0, x / x_liq - x, x)
+        }
+        t if t <= t_high && t_low < t_high => {
+            let f = (t - t_low) / 4.0;
+            (
+                (1.0 - x / xb) * (1.0 - f),
+                0.0,
+                (1.0 - x / xb) * f + (x / xb - x),
+                x,
+            )
+        }
+        _ => (0.0, 0.0, 1.0 - x, x),
+    };
+
+    (energy, gh2os, gadhs, gh2ol, gnh3l)
 }
