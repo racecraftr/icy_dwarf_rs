@@ -13,7 +13,7 @@ speedup = 1000
 time_total = 4600
 output_every = 10
 
-[saturn]
+[primary_world]
 mass = 5.6834e25
 rad = 60330
 moi_coef = 0.210

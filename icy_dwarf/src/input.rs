@@ -70,7 +70,7 @@ pub struct Ring {
 }
 
 #[derive(Default, Debug, Clone, Deserialize)]
-pub struct Saturn {
+pub struct PrimaryWorld {
     pub mass: f64,
     pub rad: f64,
     pub moi_coef: f64,
@@ -192,7 +192,7 @@ pub struct Subroutines {
 pub struct IcyDwarfInput {
     pub housekeeping: Housekeeping,
     pub grid: Grid,
-    pub saturn: Saturn,
+    pub primary_world: PrimaryWorld,
     pub world_spec: WorldSpec,
     pub worlds: Vec<IcyWorld>,
     pub subroutines: Subroutines,
@@ -217,6 +217,9 @@ impl IcyDwarfInput {
         self.worlds.len()
     }
 }
+
+#[derive(Default, Debug, Clone)]
+pub struct Fracs(pub f64, pub f64, pub f64, pub f64, pub f64);
 
 /// parses a .toml file to a [`ParsedInput`].
 /// [TOML](https://toml.io/) is a configuration file format, which can be used
