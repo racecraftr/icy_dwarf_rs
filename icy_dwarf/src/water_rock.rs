@@ -1,6 +1,5 @@
 use crate::consts::{KELVIN, NAQ, NELTS, NGASES, NMINGAS, NVAR};
 use std::fs;
-use std::path::Path;
 
 /// Simulates water-rock interactions using PHREEQC.
 /// Returns the fraction of K (potassium) leached.

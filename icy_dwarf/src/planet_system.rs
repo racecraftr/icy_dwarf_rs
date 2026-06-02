@@ -18,9 +18,12 @@ pub const RHO_H2OL_TH: f64 = RHO_H2OS_TH;
 pub const RHO_ADHS_TH: f64 = RHO_ADHS * GRAM;
 pub const RHO_NH3L_TH: f64 = XC / (1.0 / RHO_H2OL_TH) + (1.0 / RHO_ADHS_TH - 1.0 / RHO_H2OS_TH);
 
+/// Represents the state of a radial layer of an [`IcyWorld`].
 #[derive(Clone, Debug)]
 pub struct ZoneState {
+    /// Inner radius of shell.
     pub radius: f64,
+    /// Radial distance from inner radius to outer radius.
     pub dr: f64,
     pub temp: f64,
     pub temp_old: f64,
@@ -41,6 +44,24 @@ pub struct ZoneState {
 }
 
 impl ZoneState {
+    pub fn volumes(&self) -> (f64, (f64, f64, f64, f64, f64)) {
+        // Volume = outer vol - inner vol
+        //        = pi (r + dr)^2 - pi r^2
+        //        = pi ((r + dr)^2 - r^2)
+        //        = pi (r^2 + 2dr + dr^2 - r^2) = pi(2dr + dr^2)
+        let total_vol = PI_GREEK * (2. * self.dr + self.dr.powi(2));
+        let (f_rock, f_ice, f_as, f_water, f_al) = self.fracs();
+        (
+            total_vol,
+            (
+                total_vol / f_rock,
+                total_vol / f_ice,
+                total_vol / f_as,
+                total_vol / f_water,
+                total_vol / f_al,
+            ),
+        )
+    }
     pub fn fracs(&self) -> (f64, f64, f64, f64, f64) {
         (
             self.mass_rock / self.mass_total,
@@ -151,6 +172,7 @@ impl ZoneState {
     }
 }
 
+/// Represents the state of an [`IcyWorld`].
 #[derive(Clone, Debug)]
 pub struct WorldState {
     pub name: String,
@@ -173,7 +195,7 @@ impl IcyDwarfInput {
     pub fn planet_system(&self, output_path: &Option<String>) {
         let dtime = self.grid.time_step * 1.0e-6 * MYR2SEC;
         let n_time = (self.grid.time_total / self.grid.time_step) as usize;
-        let n_steps = (self.grid.output_every / self.grid.time_step) as usize;
+        let _n_steps = (self.grid.output_every / self.grid.time_step) as usize;
 
         let t_form_min = self
             .worlds
@@ -335,6 +357,9 @@ impl IcyWorld {
 }
 
 impl WorldSpec {
+    pub fn rho_th(&self) -> (f64, f64, f64, f64, f64) {
+        todo!()
+    }
     pub fn rho_hydr_th(&self) -> f64 {
         self.rho_rock_hydr * GRAM
     }

@@ -67,3 +67,15 @@ fn read_data_file(dat_file_path: &String) -> Option<Vec<Vec<f64>>> {
         None
     }
 }
+
+pub struct CrackOutput {
+    pub pressure: f64,
+    pub brittle_strength: f64,
+    pub crit_intensity: f64,
+    pub stress_intensity: f64,
+    pub porosity: f64,
+    pub deg_of_hydration: f64,
+    pub crack_size_hydr_old: f64,
+    pub crack_size_diss_old: f64,
+    pub crack_size: f64,
+}
