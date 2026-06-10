@@ -1,4 +1,6 @@
 use crate::consts::{KELVIN, NAQ, NELTS, NGASES, NMINGAS, NVAR};
+use extendr_api::prelude::*;
+use extendr_engine::*;
 use std::fs;
 
 /// Simulates water-rock interactions using PHREEQC.
@@ -17,7 +19,14 @@ pub fn water_rock(path: &str, t: f64, p: f64, mut wr: f64, chondrite: i32) -> Re
     // extendr_api::extendr_engine::start_r();
     // let logfO2 = R!(r#"
     //     -3.0 * CHNOSZ::subcrt(c("quartz"), "cr", T=t_c, P=p_bar)$out$logK + ...
-    // "#).unwrap().as_real().unwrap();
+    // "#)
+    // .unwrap()
+    // .as_real()
+    // .unwrap();
+    extendr_engine::start_r();
+    let log_o2 = R!(r#"
+            -3.0 * CHNOSZ::subcrt(c("quartz"), "cr", T={{t}}, P={{p}}, )
+        "#);
 
     // Placeholder for R/CHNOSZ calculations:
     let logf_oxygen = 0.0; // TODO: Replace with extendr-api call to CHNOSZ
@@ -157,4 +166,16 @@ fn write_phreeqc_input(
 
     fs::write(output_file, output).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod r_tests {
+    use super::*;
+    #[test]
+    fn test_r_works() {
+        test! {
+            let n = R!(r#"2 + 2"#).unwrap().as_real().unwrap();
+            assert!(n == 4.);
+        }
+    }
 }
