@@ -1,4 +1,4 @@
-use num::{Signed, traits::Inv};
+use num::traits::Inv;
 
 use crate::{consts::MYR2SEC, input::IcyDwarfInput, planet_system::WorldState};
 
@@ -116,12 +116,15 @@ pub fn d2_laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
             break;
         }
     }
-    d2b_lapj *= alpha.powf(j - 2.);
-    for m in 0..j as i32 {
-        let m = m as f64;
-        d2b_lapj *= (s + m) / (m + 1.);
-    }
-    d2b_lapj * 2.
+    d2b_lapj
+        * alpha.powf(j - 2.)
+        * (0..j as i32)
+            .map(|m| {
+                let m = m as f64;
+                (s + m) / (1. + m)
+            })
+            .product::<f64>()
+        * 2.
 }
 
 pub fn mmid(y: &[f64], dydx: &[f64], derivs: fn(f64, &[f64], &[f64]) -> Vec<f64>) {}
