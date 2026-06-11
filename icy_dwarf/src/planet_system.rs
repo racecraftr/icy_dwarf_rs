@@ -2,8 +2,9 @@ use std::sync::LazyLock;
 
 use crate::{
     consts::*,
-    create_output,
+    crack, create_output,
     input::{IcyDwarfInput, IcyWorld, PrimaryWorld, TidalQ, WorldSpec},
+    planet_system,
 };
 
 // pub fn planet_system(parsed: &ParsedInput) {
@@ -41,6 +42,11 @@ pub struct ZoneState {
     pub x_hydr_old: f64,
     pub kappa: f64,
     pub nusselt: f64,
+    pub crack: f64,
+    pub crack_size: f64,
+    pub p_pore: f64,
+    pub p_hydr: f64,
+    pub act: [f64; 3],
 }
 
 impl ZoneState {
@@ -79,6 +85,10 @@ impl ZoneState {
         let energy_slush = self.mass_ammonia_solid * n;
         let sum = energy_rock + energy_ice + energy_slush;
         (sum, (energy_rock, energy_ice, energy_slush))
+    }
+
+    pub fn brittle_strength(&self) -> f64 {
+        crack::strain(self.pressure, self.x_hydr, self.temp, self.porosity).0
     }
 
     /// Recalculates `temp` and phase distributions based on the current `energy_total`
@@ -264,6 +274,11 @@ impl IcyDwarfInput {
                         x_hydr_old: world.hydr_init,
                         kappa: 0.0,
                         nusselt: 1.0,
+                        crack: 0.0,
+                        crack_size: 0.0,
+                        p_pore: 0.0,
+                        p_hydr: 0.0,
+                        act: [0.0; 3],
                     });
                     current_r = next_r;
                 }

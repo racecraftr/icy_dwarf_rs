@@ -1,19 +1,6 @@
 use std::{fs, path::Path};
 
-use crate::{
-    consts::{
-        A_MIN, ASPECT_RATIO, BAR, C_F_BYERLEE_HIP, D_FLOW_LAW, D0_DELTAB, DELTA_ALPHA, DELTA_P_BAR,
-        DELTA_T_STEP, DELTA_TEMPK, DELTA_TEMPK_SPECIES, E_YOUNG_OLIV, E_YOUNG_SERP, EA_CHRYSOTILE,
-        EA_MAGNESITE, EA_SILICA, K_B, K_IC_OLIV, K_IC_SERP, L_SIZE, MOLAR_VOLUME_CHRYSOTILE,
-        MOLAR_VOLUME_MAGNESITE, MOLAR_VOLUME_SILICA, MPA, MU_F_BYERLEE_HIP, MU_F_BYERLEE_LOP,
-        MU_F_SERP, MU_XU_CHRYSOTILE, MU_XU_MAGNESITE, MU_XU_SILICA, N_FIT, NU_POISSON_OLIV,
-        NU_POISSON_SERP, NU_PROD_CHRYSOTILE, NU_PROD_MAGNESITE, NU_PROD_SILICA, OMEGA, P_BAR_MIN,
-        P_STEP, PI_GREEK, QGBS, R_G, RHO_H2OL, SIZEA_TP, SMALLEST_CRACK_SIZE, TEMPK_MIN,
-        TEMPK_MIN_SPECIES,
-    },
-    input::IcyDwarfInput,
-    planet_system::ZoneState,
-};
+use crate::{consts::*, input::IcyDwarfInput, planet_system::ZoneState};
 
 pub struct Data {
     pub atp: Vec<Vec<f64>>,
@@ -68,24 +55,20 @@ impl IcyDwarfInput {
     /// Calculation of the depth and profile of cracking over time.
     pub fn crack(
         &self,
-        zone: &ZoneState,
-        crack_val: f64,
-        crack_size_val: f64,
+        zone: &mut ZoneState,
         dtime: f64,
-        act_val: [f64; 3],
         data: &Data,
         circ: bool,
-        p_pore_val: f64,
-        p_hydr_val: f64,
-        brittle_strength: f64,
-        rho_hydr: f64,
-        rho_rock: f64,
     ) -> CrackOutput {
         let warnings = self.housekeeping.warnings;
         let thermal_mismatch = self.core_crack.incl_therm_mismatch;
         let pore_water_expansion = self.core_crack.incl_pore;
         let hydration_dehydration = self.core_crack.incl_hydr;
         let dissolution_precipitation = self.core_crack.incl_dissol && circ;
+
+        let rho_hydr = self.world_spec.rho_rock_hydr;
+        let rho_rock = self.world_spec.rho_rock_dry;
+        let (brittle_strength, _) = strain(zone.pressure, zone.x_hydr, zone.temp, zone.porosity);
 
         let mut dtdt = 0.0;
         let e_young = zone.x_hydr * E_YOUNG_SERP + (1.0 - zone.x_hydr) * E_YOUNG_OLIV;
@@ -98,16 +81,16 @@ impl IcyDwarfInput {
             brittle_strength: brittle_strength / MPA,
             crit_intensity: k_ic,
             stress_intensity: 0.0,
-            porosity: p_pore_val / MPA,
-            deg_of_hydration: p_hydr_val / MPA,
+            porosity: zone.p_pore / MPA,
+            deg_of_hydration: zone.p_hydr / MPA,
             crack_size_hydr_old: 0.0,
             crack_size_diss_old: 0.0,
-            crack_size: crack_size_val,
+            crack_size: zone.crack_size,
 
-            crack: crack_val,
-            p_pore: p_pore_val,
-            p_hydr: p_hydr_val,
-            act: act_val,
+            crack: zone.crack,
+            p_pore: zone.p_pore,
+            p_hydr: zone.p_hydr,
+            act: zone.act,
         };
 
         //-------------------------------------------------------------------
@@ -377,6 +360,13 @@ impl IcyDwarfInput {
                 output.crack = -1.0; // Crack closed after precipitation
             }
         }
+
+        // Write the updated state back to zone
+        zone.crack = output.crack;
+        zone.crack_size = output.crack_size;
+        zone.p_pore = output.p_pore;
+        zone.p_hydr = output.p_hydr;
+        zone.act = output.act;
 
         output
     }
