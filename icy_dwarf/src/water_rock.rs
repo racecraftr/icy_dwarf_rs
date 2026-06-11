@@ -14,25 +14,57 @@ pub fn water_rock(path: &str, t: f64, p: f64, mut wr: f64, chondrite: i32) -> Re
 
     let molmass = load_mol_mass(path)?;
 
-    // To call R code from Rust, the recommended approach is to use the `extendr-api` crate.
-    // Example (requires `extendr-api` in Cargo.toml):
-    // extendr_api::extendr_engine::start_r();
-    // let logfO2 = R!(r#"
-    //     -3.0 * CHNOSZ::subcrt(c("quartz"), "cr", T=t_c, P=p_bar)$out$logK + ...
-    // "#)
-    // .unwrap()
-    // .as_real()
-    // .unwrap();
+    let t_c = t - KELVIN;
+    let p_bar = p; // pressure in bar (passed from the thermal model)
+
     extendr_engine::start_r();
-    let log_o2 = R!(r#"
-            -3.0 * CHNOSZ::subcrt(c("quartz"), "cr", T={{t}}, P={{p}}, )
-        "#);
+    let _ = R!(r#"
+        if (!requireNamespace("CHNOSZ", quietly = TRUE)) {
+            stop("CHNOSZ package not installed in R")
+        }
+        library(CHNOSZ, quietly = TRUE)
+        data(thermo)
+        get_logK <- function(species, state, T, P) {
+            res <- subcrt(species, state, T = T, P = P)
+            res$out[[1]]$logK[1]
+        }
+    "#)
+    .map_err(|e| format!("Failed to initialize CHNOSZ in R: {:?}", e))?;
 
-    // Placeholder for R/CHNOSZ calculations:
-    let logf_oxygen = 0.0; // TODO: Replace with extendr-api call to CHNOSZ
-    let log_ko2_h2o = 0.0; // TODO: Replace with extendr-api call to CHNOSZ
+    let log_quartz = R!(r#"get_logK("quartz", "cr", {{t_c}}, {{p_bar}})"#)
+        .map_err(|e| e.to_string())?
+        .as_real()
+        .ok_or_else(|| "Failed to get logK for quartz".to_string())?;
+    let log_magnetite = R!(r#"get_logK("magnetite", "cr", {{t_c}}, {{p_bar}})"#)
+        .map_err(|e| e.to_string())?
+        .as_real()
+        .ok_or_else(|| "Failed to get logK for magnetite".to_string())?;
+    let log_fayalite = R!(r#"get_logK("fayalite", "cr", {{t_c}}, {{p_bar}})"#)
+        .map_err(|e| e.to_string())?
+        .as_real()
+        .ok_or_else(|| "Failed to get logK for fayalite".to_string())?;
+    let log_o2 = R!(r#"get_logK("O2", "g", {{t_c}}, {{p_bar}})"#)
+        .map_err(|e| e.to_string())?
+        .as_real()
+        .ok_or_else(|| "Failed to get logK for O2".to_string())?;
 
-    let mut fmq = -ph + 0.25 * (logf_oxygen + log_ko2_h2o);
+    let log_h_plus = R!(r#"get_logK("H+", "aq", {{t_c}}, {{p_bar}})"#)
+        .map_err(|e| e.to_string())?
+        .as_real()
+        .ok_or_else(|| "Failed to get logK for H+".to_string())?;
+    let log_e_minus = R!(r#"get_logK("e-", "aq", {{t_c}}, {{p_bar}})"#)
+        .map_err(|e| e.to_string())?
+        .as_real()
+        .ok_or_else(|| "Failed to get logK for e-".to_string())?;
+    let log_h2o = R!(r#"get_logK("H2O", "liq", {{t_c}}, {{p_bar}})"#)
+        .map_err(|e| e.to_string())?
+        .as_real()
+        .ok_or_else(|| "Failed to get logK for H2O".to_string())?;
+
+    let logf_o2 = -3.0 * log_quartz - 2.0 * log_magnetite + 3.0 * log_fayalite + 1.0 * log_o2;
+    let log_ko2_h2o = -4.0 * log_h_plus - 4.0 * log_e_minus - 1.0 * log_o2 + 2.0 * log_h2o;
+
+    let mut fmq = -ph + 0.25 * (logf_o2 + log_ko2_h2o);
 
     if wr < 0.5 {
         println!("WR is {} < 0.5, assuming WR=0.5", wr);
@@ -58,6 +90,8 @@ pub fn water_rock(path: &str, t: f64, p: f64, mut wr: f64, chondrite: i32) -> Re
         DestroyIPhreeqc(id);
     }
     */
+
+    unsafe {}
 
     let mass_water = 0.0; // TODO: Extract from IPhreeqc
     let total_k = 0.0; // TODO: Calculate based on chondrite type and extracted molmass
