@@ -213,11 +213,11 @@ impl IcyDwarfInput {
                 let name = &world.name;
                 for s in ["Thermal", "Heats", "Crack_depth_WR", "Crack_stresses"] {
                     let _ =
-                        create_output(output_path.clone(), format!("{}_{}_{}.txt", idx, name, s));
+                        create_output(output_path.clone(), format!("{}_{}_{}.csv", idx, name, s));
                 }
                 if self.primary_world.mass > 0.0 {
                     let _ =
-                        create_output(output_path.clone(), format!("{}_{}_Orbit.txt", idx, name));
+                        create_output(output_path.clone(), format!("{}_{}_Orbit.csv", idx, name));
                 }
 
                 let rho_ice = 1.0
@@ -306,6 +306,7 @@ impl IcyDwarfInput {
         }
 
         if self.housekeeping.recover {
+            // TODO: Implement recovery code
             return;
         }
         //-------------------------------------------------------------------
