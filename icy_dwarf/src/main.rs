@@ -1,4 +1,5 @@
 mod crack;
+mod crack_table;
 mod cryolava;
 mod input;
 mod orbit;
@@ -41,7 +42,7 @@ pub mod consts {
     pub const K_B: f64 = 1.3806502e-23;
 
     /// Ratio of the circumference of a circle to its radius
-    pub const PI_GREEK: f64 = f64::consts::PI; // rust has a pretty good pi const built in 
+    pub const PI_GREEK: f64 = f64::consts::PI; // rust has a pretty good pi const built in
 
     /// Mass of the Earth (kg)
     pub const M_EARTH: f64 = 5.9721986e24;
@@ -148,7 +149,7 @@ pub mod consts {
     pub const KAPHYDR: f64 = 1.0e5;
     /// Thermal conductivity of ADH ice (cgs)
     pub const KAPADHS: f64 = 1.2e5;
-    /// Thermal conductivity of liquid water (cgs)    
+    /// Thermal conductivity of liquid water (cgs)
     pub const KAPH2OL: f64 = 0.61e5;
     /// Thermal conductivity of liquid ammonia (cgs)
     pub const KAPNH3L: f64 = 0.022e5;
