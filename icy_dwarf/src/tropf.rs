@@ -26,20 +26,8 @@ pub enum DissType {
 
 type C = Complex64;
 
-// fn dot_prod(v1: &[C], v2: &[C]) -> C {
-//     v1.iter().zip(v2.iter()).map(|(v1, v2)| v1 * v2).sum()
-// }
-//
-// fn vec_norm(v: &[C]) -> f64 {
-//     v.iter()
-//         .map(|c| c * c.conj())
-//         .sum::<Complex64>()
-//         .abs()
-//         .sqrt()
-// }
-
 fn ratio_factorials(n: usize, s: usize) -> f64 {
-    ((n - s + 1)..(n + s)).product::<usize>() as f64
+    ((n - s + 1)..=(n + s)).product::<usize>() as f64
 }
 
 /// uses the [`saer`] library to perform the Bi-conjugate Gradient Stabilized
@@ -183,5 +171,42 @@ mod bicgstab_tests {
             .zip([1., -2., 5.])
             .all(|(a, b)| (a.re - b).abs() < 1e-12);
         assert!(res);
+    }
+}
+
+#[cfg(test)]
+mod ratio_factorials_tests {
+    use super::*;
+
+    #[test]
+    fn test_ratio_factorials() {
+        // (2+2)! / (2-2)! = 24 / 1 = 24
+        assert_eq!(ratio_factorials(2, 2), 24.0);
+        // (3+1)! / (3-1)! = 24 / 2 = 12
+        assert_eq!(ratio_factorials(3, 1), 12.0);
+        // (3+2)! / (3-2)! = 120 / 1 = 120
+        assert_eq!(ratio_factorials(3, 2), 120.0);
+    }
+}
+
+#[cfg(test)]
+mod globe_time_average_tests {
+    use super::*;
+
+    #[test]
+    fn test_globe_time_average() {
+        let s_coefs = [C::new(1.0, 1.0)];
+        let t_coefs = [C::new(2.0, -1.0)];
+        // sc = 1 + i, tc = 2 - i
+        // sc_c = 1 - i, tc_c = 2 + i
+        // sc * tc_c = (1 + i)(2 + i) = 2 + i + 2i - 1 = 1 + 3i
+        // sc_c * tc = (1 - i)(2 - i) = 2 - i - 2i - 1 = 1 - 3i
+        // sc * tc_c + sc_c * tc = 2.0 (real part)
+        // For n = 2, s = 2:
+        // (2.0) / (2 * 2 + 1) * ratio_factorials(2, 2)
+        // = 2.0 / 5.0 * 24.0 = 9.6
+        let res = globe_time_average(&s_coefs, &t_coefs, 2, &[2]);
+        assert_eq!(res.len(), 1);
+        assert!((res[0] - 9.6).abs() < 1e-12);
     }
 }
