@@ -376,11 +376,11 @@ pub fn read_data(dat_folder: &String) -> Option<Data> {
     Some(Data {
         atp: read_data_file(&format!("{}/Crack_aTP.txt", dat_folder))?,
         alpha: read_data_file(&format!("{}/Crack_alpha.txt", dat_folder))?,
-        beta: read_data_file(&format!("{}/Crack_bet.txt", dat_folder))?,
+        beta: read_data_file(&format!("{}/Crack_beta.txt", dat_folder))?,
         chrysotile: read_data_file(&format!("{}/Crack_chrysotile.txt", dat_folder))?,
         integral: read_data_file(&format!("{}/Crack_integral.txt", dat_folder))?,
         magnesite: read_data_file(&format!("{}/Crack_magnesite.txt", dat_folder))?,
-        silica: read_data_file(&format!("{}/Crack_magnesite.txt", dat_folder))?,
+        silica: read_data_file(&format!("{}/Crack_silica.txt", dat_folder))?,
     })
 }
 
