@@ -71,7 +71,7 @@ pub fn water_rock(path: &str, t: f64, p: f64, mut wr: f64, chondrite: i32) -> Re
         wr = 0.5;
     }
 
-    write_phreeqc_input(&infile, t, p, ph, 0.0, fmq, wr, &tempinput)?;
+    write_phreeqc_input(&infile, t, p, ph, fmq, wr, &tempinput)?;
 
     // Calling IPhreeqc requires either a `phreeqc-sys` crate or manually mapping the C FFI.
     // Example of how the FFI calls would look in Rust:
@@ -166,7 +166,7 @@ fn write_phreeqc_input(
     temp: f64,
     pressure: f64,
     ph: f64,
-    rel_pe: f64,
+    // rel_pe: f64,
     pe: f64,
     wr: f64,
     output_file: &str,
