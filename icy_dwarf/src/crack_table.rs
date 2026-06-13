@@ -36,10 +36,10 @@ fn write_output(data: &[Vec<f64>], base_path: &str, relative_file: &str) -> Resu
 pub fn a_tp(path: &str, warnings: bool) -> Result<(), String> {
     let mut integral = vec![vec![0.0; 2]; INT_SIZE as usize];
 
-    for j in 0..INT_SIZE as usize {
+    for (j, r) in integral.iter_mut().enumerate() {
         let a_var = A_VAR_MAX * (j + 1) as f64 / INT_SIZE as f64;
-        integral[j][0] = a_var;
-        integral[j][1] = 0.0;
+        r[0] = a_var;
+        r[1] = 0.0;
 
         let mut d_int_prec = 0.0;
         for i in 0..(INT_STEPS - 1) as usize {
@@ -58,7 +58,7 @@ pub fn a_tp(path: &str, warnings: bool) -> Result<(), String> {
             let sigma_yy = term1 - term2 + term3 - term4;
             let d_int = sigma_yy * x.sqrt() / (a_var - x).sqrt();
 
-            integral[j][1] += (d_int + d_int_prec) / 2.0 * 1.0 / INT_STEPS as f64 * a_var;
+            r[1] += (d_int + d_int_prec) / 2.0 * 1.0 / INT_STEPS as f64 * a_var;
             d_int_prec = d_int;
         }
     }
