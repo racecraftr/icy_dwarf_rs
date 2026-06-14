@@ -199,6 +199,18 @@ pub struct WorldState {
     pub moi: f64,
     pub zones: Vec<ZoneState>,
     pub res_acct_for: Vec<f64>,
+    pub h_old: f64,
+    pub k_old: f64,
+    pub a__old: f64,
+    pub cs_ee_old: f64,
+    pub cs_eep_old: f64,
+    pub cr_e_old: f64,
+    pub cr_ep_old: f64,
+    pub cr_ee_old: f64,
+    pub cr_eep_old: f64,
+    pub cr_epep_old: f64,
+    pub w_tide_tot: f64,
+    pub w_fluidtide_tot: f64,
 }
 
 impl IcyDwarfInput {
@@ -304,6 +316,18 @@ impl IcyDwarfInput {
                     moi: 0.4,
                     zones,
                     res_acct_for: vec![0.; self.n_moons()],
+                    h_old: 0.0,
+                    k_old: 0.0,
+                    a__old: 0.0,
+                    cs_ee_old: 0.0,
+                    cs_eep_old: 0.0,
+                    cr_e_old: 0.0,
+                    cr_ep_old: 0.0,
+                    cr_ee_old: 0.0,
+                    cr_eep_old: 0.0,
+                    cr_epep_old: 0.0,
+                    w_tide_tot: 0.0,
+                    w_fluidtide_tot: 0.0,
                 }
             })
             .collect();
@@ -336,9 +360,71 @@ impl IcyDwarfInput {
 
         for _itime in 0..=n_time {
             real_time += dtime;
-            let _q_prim = self.primary_world.tidal_q.q_prim(&self.worlds, real_time);
+            let q_prim = self.primary_world.tidal_q.q_prim(&self.worlds, real_time);
 
-            // Call Orbit and Thermal logic
+            if self.primary_world.mass > 0.0 {
+                let nmoons = self.n_moons();
+
+                for w in world_states.iter_mut() {
+                    if w.e_orb < MIN_ECC {
+                        w.e_orb = MIN_ECC;
+                    }
+                }
+
+                let mut resonance = vec![vec![0.0; nmoons]; nmoons];
+                let mut p_capture = vec![vec![0.0; nmoons]; nmoons];
+                let a_old: Vec<f64> = world_states.iter().map(|w| w.a__old).collect();
+                let t_tide: Vec<f64> = self.worlds
+                    .iter()
+                    .map(|w| w.t_reslock * MYR2SEC * real_time / (4568.2 * MYR2SEC))
+                    .collect();
+
+                for im in 0..nmoons {
+                    let tzero_im = self.worlds[im].t_form * MYR2SEC;
+                    if real_time >= tzero_im {
+                        self.res_check(
+                            im,
+                            &world_states,
+                            &mut resonance,
+                            &mut p_capture,
+                            real_time,
+                            &a_old,
+                            &t_tide,
+                            q_prim,
+                        );
+                    }
+                }
+
+                for im in 0..nmoons {
+                    let mut res_acct_for = world_states[im].res_acct_for.clone();
+                    let res_acct_for_old = world_states[im].res_acct_for.clone();
+                    self.resscreen(&resonance[im], &mut res_acct_for, &res_acct_for_old);
+                    world_states[im].res_acct_for = res_acct_for;
+                }
+
+                for im in 0..nmoons {
+                    for i in 0..nmoons {
+                        if i != im && world_states[im].res_acct_for[i] == 0.0 {
+                            world_states[i].res_acct_for[im] = 0.0;
+                        }
+                    }
+                }
+
+                for im in 0..nmoons {
+                    let tzero_im = self.worlds[im].t_form * MYR2SEC;
+                    if real_time >= tzero_im {
+                        self.orbit(im, &mut world_states, dtime, real_time, q_prim);
+                    }
+                }
+
+                for w in world_states.iter_mut() {
+                    if w.e_orb < MIN_ECC {
+                        w.e_orb = MIN_ECC;
+                    }
+                }
+            }
+
+            // Call Thermal logic
             self.thermal(&mut world_states, dtime);
         }
     }

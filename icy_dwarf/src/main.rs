@@ -314,7 +314,7 @@ where
         return None;
     }
     let m = Mat::from_fn(rows, cols, |i, j| mat[i][j].clone());
-    todo!()
+    Some(m)
 }
 
 pub fn mat_as_complex(mat: &FloatMat) -> ComplexMat {
