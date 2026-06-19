@@ -15,17 +15,6 @@ pub enum QMode {
 
 #[repr(u8)]
 #[derive(Default, Debug, Clone, Deserialize_repr)]
-pub enum TidalModel {
-    #[default]
-    NA,
-    Elastic,
-    Maxwell,
-    Burgers, // burgers ??? lmaooo
-    Andrade,
-}
-
-#[repr(u8)]
-#[derive(Default, Debug, Clone, Deserialize_repr)]
 pub enum EccModel {
     #[default]
     E2,
@@ -93,7 +82,7 @@ pub enum ChondriteType {
 
 #[repr(u8)]
 #[derive(Default, Debug, Clone, Deserialize_repr)]
-pub enum TidalRhel {
+pub enum TidalModel {
     #[default]
     Maxwell = 2,
     Burgers,
@@ -106,7 +95,7 @@ pub struct WorldSpec {
     pub rho_rock_dry: f64,
     pub rho_rock_hydr: f64,
     pub chondrite: bool,
-    pub rhelogy: TidalRhel,
+    pub rhelogy: TidalModel,
     pub ecc_model: EccModel,
     pub tidal_heating: bool,
     pub lookup_tbl: Vec<f64>,
