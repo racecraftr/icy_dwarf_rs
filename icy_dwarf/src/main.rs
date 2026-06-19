@@ -1,3 +1,4 @@
+mod compression;
 mod crack;
 mod crack_table;
 mod cryolava;
