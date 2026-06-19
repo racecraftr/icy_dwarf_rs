@@ -25,8 +25,7 @@ impl IcyDwarfInput {
                 resorbevol = true;
                 let j = world_states[world_idx].res_acct_for[i] + 1.0;
 
-                let has_old =
-                    world_states[world_idx].a__old != 0.0 && world_states[i].a__old != 0.0;
+                let has_old = world_states[world_idx].a_old != 0.0 && world_states[i].a_old != 0.0;
 
                 let (idx_0, idx_1) = if world_states[world_idx].a_orb < world_states[i].a_orb {
                     (world_idx, i)
@@ -107,10 +106,10 @@ impl IcyDwarfInput {
                 let (h_0, k_0, a0, h_1, k_1, a1, w_0, w_1) = if has_old {
                     let h_0 = world_states[idx_0].h_old;
                     let k_0 = world_states[idx_0].k_old;
-                    let a0 = world_states[idx_0].a__old;
+                    let a0 = world_states[idx_0].a_old;
                     let h_1 = world_states[idx_1].h_old;
                     let k_1 = world_states[idx_1].k_old;
-                    let a1 = world_states[idx_1].a__old;
+                    let a1 = world_states[idx_1].a_old;
 
                     let factor_0 = 11.5
                         * r_0.powi(5)
@@ -289,10 +288,10 @@ impl IcyDwarfInput {
 
                 w_im.h_old = final_h_im;
                 w_im.k_old = final_k_im;
-                w_im.a__old = final_a__im;
+                w_im.a_old = final_a__im;
                 w_i.h_old = final_h_i;
                 w_i.k_old = final_k_i;
-                w_i.a__old = final_a__i;
+                w_i.a_old = final_a__i;
 
                 w_im.cs_ee_old = cs_ee;
                 w_i.cs_ee_old = cs_ee;
@@ -348,7 +347,7 @@ impl IcyDwarfInput {
         if !resorbevol {
             world_states[world_idx].h_old = 0.0;
             world_states[world_idx].k_old = 0.0;
-            world_states[world_idx].a__old = 0.0;
+            world_states[world_idx].a_old = 0.0;
             world_states[world_idx].cs_ee_old = 0.0;
             world_states[world_idx].cs_eep_old = 0.0;
             world_states[world_idx].cr_e_old = 0.0;
