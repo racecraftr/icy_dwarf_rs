@@ -3,8 +3,7 @@ use std::sync::LazyLock;
 use crate::{
     consts::*,
     crack, create_output,
-    input::{IcyDwarfInput, IcyWorld, PrimaryWorld, TidalQ, WorldSpec},
-    planet_system,
+    input::{IcyDwarfInput, IcyWorld, TidalQ, WorldSpec},
 };
 
 // pub fn planet_system(parsed: &ParsedInput) {
@@ -55,7 +54,8 @@ impl ZoneState {
         //        = pi (r + dr)^2 - pi r^2
         //        = pi ((r + dr)^2 - r^2)
         //        = pi (r^2 + 2dr + dr^2 - r^2) = pi(2dr + dr^2)
-        let total_vol = PI_GREEK * (2. * self.dr + self.dr.powi(2));
+        let total_vol =
+            4.0 / 3.0 * PI_GREEK * ((self.radius + self.dr).powi(3) - self.radius.powi(3));
         let (f_rock, f_ice, f_as, f_water, f_al) = self.fracs();
         (
             total_vol,
@@ -201,7 +201,7 @@ pub struct WorldState {
     pub res_acct_for: Vec<f64>,
     pub h_old: f64,
     pub k_old: f64,
-    pub a__old: f64,
+    pub a_old: f64,
     pub cs_ee_old: f64,
     pub cs_eep_old: f64,
     pub cr_e_old: f64,
@@ -318,7 +318,7 @@ impl IcyDwarfInput {
                     res_acct_for: vec![0.; self.n_moons()],
                     h_old: 0.0,
                     k_old: 0.0,
-                    a__old: 0.0,
+                    a_old: 0.0,
                     cs_ee_old: 0.0,
                     cs_eep_old: 0.0,
                     cr_e_old: 0.0,
@@ -373,8 +373,9 @@ impl IcyDwarfInput {
 
                 let mut resonance = vec![vec![0.0; nmoons]; nmoons];
                 let mut p_capture = vec![vec![0.0; nmoons]; nmoons];
-                let a_old: Vec<f64> = world_states.iter().map(|w| w.a__old).collect();
-                let t_tide: Vec<f64> = self.worlds
+                let a_old: Vec<f64> = world_states.iter().map(|w| w.a_old).collect();
+                let t_tide: Vec<f64> = self
+                    .worlds
                     .iter()
                     .map(|w| w.t_reslock * MYR2SEC * real_time / (4568.2 * MYR2SEC))
                     .collect();
