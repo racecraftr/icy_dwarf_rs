@@ -11,12 +11,6 @@ pub const X_SUP_BOUND: f64 = 1.0e3;
 pub const K_IC_ICE: f64 = 0.15e6;
 pub const K_IC_CRUST: f64 = 0.5e6;
 
-impl ThermalOut {
-    pub fn mass_total_full(&self) -> f64 {
-        self.mass_rock + self.mass_ice + self.mass_ammonia_solid + self.mass_water + self.mass_ammonia_liquid
-    }
-}
-
 impl IcyDwarfInput {
     pub fn calculate_mass_liquid(&self, thermal_out: &[Vec<ThermalOut>], t: usize) -> f64 {
         thermal_out.iter().map(|v| v[t].mass_water * GRAM).sum()
@@ -36,7 +30,11 @@ impl IcyDwarfInput {
         self.grid.n_zones as i32 - 1
     }
 
-    pub fn calculate_pressure_cryolava(&self, thermal_out: &[Vec<ThermalOut>], t: usize) -> Vec<f64> {
+    pub fn calculate_pressure_cryolava(
+        &self,
+        thermal_out: &[Vec<ThermalOut>],
+        t: usize,
+    ) -> Vec<f64> {
         let nr = self.grid.n_zones;
         let mut pressure = vec![0.0; nr];
         let mut m = vec![0.0; nr];
@@ -55,13 +53,13 @@ impl IcyDwarfInput {
 
         for ir in 0..nr {
             let zone = &thermal_out[ir][t];
-            let d_m = zone.mass_total_full();
+            let d_m = zone.mass_total();
             frock[ir] = zone.mass_rock / d_m;
             fh2os[ir] = zone.mass_ice / d_m;
             fh2ol[ir] = zone.mass_water / d_m;
             fadhs[ir] = zone.mass_ammonia_solid / d_m;
             fnh3l[ir] = zone.mass_ammonia_liquid / d_m;
-            
+
             m[ir] = if ir > 0 { m[ir - 1] + d_m } else { d_m };
         }
 
@@ -84,7 +82,9 @@ impl IcyDwarfInput {
                 + 0.5 * (g[ir + 1] + g[ir]) * (r_bound[ir + 2] - r_bound[ir + 1])
                     / crate::consts::KM2CM
                     * crate::consts::KM
-                    * (frock[ir + 1] * (zone_curr.deg_of_hydr * rho_hydr + (1.0 - zone_curr.deg_of_hydr) * rho_dry)
+                    * (frock[ir + 1]
+                        * (zone_curr.deg_of_hydr * rho_hydr
+                            + (1.0 - zone_curr.deg_of_hydr) * rho_dry)
                         + fh2os[ir + 1] * crate::consts::RHO_H2OS
                         + fh2ol[ir + 1] * crate::consts::RHO_H2OL
                         + fadhs[ir + 1] * crate::consts::RHO_ADHS
@@ -122,10 +122,17 @@ impl IcyDwarfInput {
             r -= 1;
         }
 
-        let r_hydrostatic = (r_seafloor_idx as f64 + crate::consts::RHO_H2OS / crate::consts::RHO_H2OL * (r_diff as f64 - r_seafloor_idx as f64)).floor() as i32;
+        let r_hydrostatic = (r_seafloor_idx as f64
+            + crate::consts::RHO_H2OS / crate::consts::RHO_H2OL
+                * (r_diff as f64 - r_seafloor_idx as f64))
+            .floor() as i32;
 
-        let species = ["H2", "CH4", "CH3OH", "CO", "CO2", "NH3", "N2", "H2S", "SO2", "Ar"];
-        let wrt_h2o = [1.0e-5, 0.01, 0.03, 0.2, 0.1, 0.01, 0.01, 0.005, 2.0e-5, 0.001];
+        let species = [
+            "H2", "CH4", "CH3OH", "CO", "CO2", "NH3", "N2", "H2S", "SO2", "Ar",
+        ];
+        let wrt_h2o = [
+            1.0e-5, 0.01, 0.03, 0.2, 0.1, 0.01, 0.01, 0.005, 2.0e-5, 0.001,
+        ];
 
         let mut abundances = vec![0.0; N_SPECIES as usize];
         for i in 0..N_SPECIES as usize {
@@ -172,7 +179,7 @@ impl IcyDwarfInput {
             for i in r_seafloor_idx..abs_r {
                 let mut m_inf = 0.0;
                 for u in 0..i {
-                    m_inf += thermal_out[u][t].mass_total_full();
+                    m_inf += thermal_out[u][t].mass_total();
                 }
                 let r_m = thermal_out[i][t].radius_km / 100.0;
                 let d_int = crate::consts::RHO_H2OL * crate::consts::G / (r_m * r_m);
@@ -207,26 +214,53 @@ impl IcyDwarfInput {
 
             for i in 0..N_SPECIES as usize {
                 let species_name = species[i];
-                let log_reactant = R!(r#"get_logK_safely({{species_name}}, "g", {{temp_c}}, {{p_bar}})"#)
-                    .map_err(|e| e.to_string())?
-                    .as_real()
-                    .ok_or_else(|| format!("Failed to get logK for {} g at T_c={}, P={}", species_name, temp_c, p_bar))?;
-                let log_product = R!(r#"get_logK_safely({{species_name}}, "aq", {{temp_c}}, {{p_bar}})"#)
-                    .map_err(|e| e.to_string())?
-                    .as_real()
-                    .ok_or_else(|| format!("Failed to get logK for {} aq at T_c={}, P={}", species_name, temp_c, p_bar))?;
+                let log_reactant =
+                    R!(r#"get_logK_safely({{species_name}}, "g", {{temp_c}}, {{p_bar}})"#)
+                        .map_err(|e| e.to_string())?
+                        .as_real()
+                        .ok_or_else(|| {
+                            format!(
+                                "Failed to get logK for {} g at T_c={}, P={}",
+                                species_name, temp_c, p_bar
+                            )
+                        })?;
+                let log_product =
+                    R!(r#"get_logK_safely({{species_name}}, "aq", {{temp_c}}, {{p_bar}})"#)
+                        .map_err(|e| e.to_string())?
+                        .as_real()
+                        .ok_or_else(|| {
+                            format!(
+                                "Failed to get logK for {} aq at T_c={}, P={}",
+                                species_name, temp_c, p_bar
+                            )
+                        })?;
 
-                k_rxn[i] = 10.0_f64.powf(-1.0 * log_reactant + 1.0 * log_product);
+                k_rxn[i] = 10f64.powf(log_product - log_reactant);
                 if !k_rxn[i].is_finite() || k_rxn[i] < 0.0 {
-                    println!("Cryolava: Error calculating K_rxn[{}]={} at t={}, r={}", i, k_rxn[i], t, r);
+                    println!(
+                        "Cryolava: Error calculating K_rxn[{}]={} at t={}, r={}",
+                        i, k_rxn[i], t, r
+                    );
                 }
             }
 
-            let mut x_inf = 0.0;
+            let mut x_inf = 0.;
             let mut x_sup = X_SUP_BOUND;
 
-            let f_inf = f(p_gas / crate::consts::BAR, m_liq, &abundances, &k_rxn, x_inf);
-            let f_sup = f(p_gas / crate::consts::BAR, m_liq, &abundances, &k_rxn, x_sup);
+            let f_inf = f(
+                p_gas / crate::consts::BAR,
+                m_liq,
+                &abundances,
+                &k_rxn,
+                x_inf,
+            );
+            let f_sup = f(
+                p_gas / crate::consts::BAR,
+                m_liq,
+                &abundances,
+                &k_rxn,
+                x_sup,
+            );
 
             let mut x_vap_val = 0.0;
             if f_inf * f_sup > 0.0 {
@@ -244,12 +278,27 @@ impl IcyDwarfInput {
                 let mut dx_old = (x_inf - x_sup).abs();
                 let mut dx = dx_old;
 
-                let mut f_x = f(p_gas / crate::consts::BAR, m_liq, &abundances, &k_rxn, x_vap_val);
-                let mut f_prime_x = f_prime(p_gas / crate::consts::BAR, m_liq, &abundances, &k_rxn, x_vap_val).unwrap_or(0.0);
+                let mut f_x = f(
+                    p_gas / crate::consts::BAR,
+                    m_liq,
+                    &abundances,
+                    &k_rxn,
+                    x_vap_val,
+                );
+                let mut f_prime_x = f_prime(
+                    p_gas / crate::consts::BAR,
+                    m_liq,
+                    &abundances,
+                    &k_rxn,
+                    x_vap_val,
+                )
+                .unwrap_or(0.0);
 
                 let mut n_iter = 0;
                 while f_x.abs() > NEWT_RAPH_THRESH {
-                    if (((x_vap_val - x_sup) * f_prime_x - f_x) * ((x_vap_val - x_inf) * f_prime_x - f_x) > 0.0)
+                    if (((x_vap_val - x_sup) * f_prime_x - f_x)
+                        * ((x_vap_val - x_inf) * f_prime_x - f_x)
+                        > 0.0)
                         || (2.0 * f_x).abs() > (dx_old * f_prime_x).abs()
                     {
                         dx_old = dx;
@@ -261,8 +310,21 @@ impl IcyDwarfInput {
                         x_vap_val -= dx;
                     }
 
-                    f_x = f(p_gas / crate::consts::BAR, m_liq, &abundances, &k_rxn, x_vap_val);
-                    f_prime_x = f_prime(p_gas / crate::consts::BAR, m_liq, &abundances, &k_rxn, x_vap_val).unwrap_or(0.0);
+                    f_x = f(
+                        p_gas / crate::consts::BAR,
+                        m_liq,
+                        &abundances,
+                        &k_rxn,
+                        x_vap_val,
+                    );
+                    f_prime_x = f_prime(
+                        p_gas / crate::consts::BAR,
+                        m_liq,
+                        &abundances,
+                        &k_rxn,
+                        x_vap_val,
+                    )
+                    .unwrap_or(0.0);
 
                     if f_x < 0.0 {
                         x_inf = x_vap_val;
@@ -284,21 +346,28 @@ impl IcyDwarfInput {
 
                 x_vap_table[r][0] = (nr - abs_r) as f64 * r_p / nr as f64;
                 x_vap_table[r][1] = p_gas / crate::consts::BAR;
-                x_vap_table[r][2] = x_vap_val * crate::consts::RHO_H2OL * crate::consts::R_G * temp / crate::consts::BAR;
+                x_vap_table[r][2] = x_vap_val * crate::consts::RHO_H2OL * crate::consts::R_G * temp
+                    / crate::consts::BAR;
                 x_vap_table[r][3] = crate::consts::RHO_H2OL / (1.0 + x_vap_table[r][2]);
 
-                let mut m_inf_stress = 0.0;
-                if r > 0 {
+                let m_inf_stress = if r > 0 {
                     let limit = r_seafloor_idx + r - 1;
-                    for u in 0..limit {
-                        m_inf_stress += thermal_out[u][t].mass_total_full();
-                    }
-                }
+                    thermal_out
+                        .iter()
+                        .take(limit)
+                        .fold(0., |n, v| n + v[t].mass_total())
+                } else {
+                    0.
+                };
 
                 let r_m_stress = thermal_out[abs_r][t].radius_km / 100.0;
                 let depth_m = r as f64 * r_p / nr as f64 * crate::consts::KM;
 
-                x_vap_table[r][4] = -(x_vap_table[r][3] - crate::consts::RHO_H2OS) * 2.0 * crate::consts::G * m_inf_stress * crate::consts::GRAM
+                x_vap_table[r][4] = -(x_vap_table[r][3] - crate::consts::RHO_H2OS)
+                    * 2.0
+                    * crate::consts::G
+                    * m_inf_stress
+                    * crate::consts::GRAM
                     / (r_m_stress * r_m_stress)
                     * depth_m.powf(1.5)
                     / crate::consts::PI_GREEK.sqrt();
@@ -306,9 +375,16 @@ impl IcyDwarfInput {
                 let is_in_ice = abs_r <= r_diff;
                 let threshold = if is_in_ice { K_IC_ICE } else { K_IC_CRUST };
 
-                x_vap_table[r][5] = if x_vap_table[r][4] > threshold { 1.0 } else { 0.0 };
+                x_vap_table[r][5] = if x_vap_table[r][4] > threshold {
+                    1.0
+                } else {
+                    0.0
+                };
 
-                println!("X_VAP = {} and x_vap = V_gas/V_liq = {} found after {} iterations", x_vap_val, x_vap_table[r][2], n_iter);
+                println!(
+                    "X_VAP = {} and x_vap = V_gas/V_liq = {} found after {} iterations",
+                    x_vap_val, x_vap_table[r][2], n_iter
+                );
             }
 
             for i in 0..N_SPECIES as usize {
@@ -322,20 +398,41 @@ impl IcyDwarfInput {
         write_output(&x_vap_table, path, "Outputs/Cryolava_xvap.txt")?;
 
         let nr_f = nr as f64;
-        println!("\n Seafloor @ radius {} km", r_seafloor_idx as f64 * r_p / nr_f);
-        println!(" Hydrostatic level in ice @ radius {} km", r_hydrostatic as f64 * r_p / nr_f);
+        println!(
+            "\n Seafloor @ radius {} km",
+            r_seafloor_idx as f64 * r_p / nr_f
+        );
+        println!(
+            " Hydrostatic level in ice @ radius {} km",
+            r_hydrostatic as f64 * r_p / nr_f
+        );
         if r_diff < nr - 2 {
-            println!(" Crust starts at R_diff = {} km", r_diff as f64 * r_p / nr_f);
+            println!(
+                " Crust starts at R_diff = {} km",
+                r_diff as f64 * r_p / nr_f
+            );
         } else {
             println!(" No crust");
         }
 
         let mut out_path = PathBuf::from(path);
         out_path.push("Outputs");
-        println!("\nOutputs successfully generated in {:?} directory:", out_path);
-        println!("1. Molalities vs. depth at t={} in mol kg-1: Cryolava_molalities.txt", t);
-        println!("2. Partial pressures vs. depth at t={} in bar: Cryolava_partialP.txt", t);
-        println!("3. Volumic vapor fraction x_vap vs. P_gas at t={}: Cryolava_xvap.txt", t);
+        println!(
+            "\nOutputs successfully generated in {:?} directory:",
+            out_path
+        );
+        println!(
+            "1. Molalities vs. depth at t={} in mol kg-1: Cryolava_molalities.txt",
+            t
+        );
+        println!(
+            "2. Partial pressures vs. depth at t={} in bar: Cryolava_partialP.txt",
+            t
+        );
+        println!(
+            "3. Volumic vapor fraction x_vap vs. P_gas at t={}: Cryolava_xvap.txt",
+            t
+        );
 
         Ok(())
     }
