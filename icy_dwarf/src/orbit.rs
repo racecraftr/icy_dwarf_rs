@@ -650,9 +650,7 @@ impl IcyDwarfInput {
         q_prim: f64,
     ) {
         let nmoons = world_states.len();
-        for i in 0..nmoons {
-            resonance[im][i] = 0.0;
-        }
+        resonance[im] = vec![0.; nmoons];
 
         let m_prim = self.primary_world.mass;
         let r_prim = self.primary_world.rad;
@@ -682,11 +680,11 @@ impl IcyDwarfInput {
 
                         let is_already_captured = world_states[inner].res_acct_for[outer] > 0.0;
                         let commensurability = if is_already_captured {
-                            (a_old[inner] / a_old[outer]).powf(-1.5) * j / (j + l)
+                            (a_old[inner] / a_old[outer]).powf(-1.5)
                         } else {
-                            (world_states[inner].a_orb / world_states[outer].a_orb).powf(-1.5) * j
-                                / (j + l)
-                        };
+                            (world_states[inner].a_orb / world_states[outer].a_orb).powf(-1.5)
+                        } * j
+                            / (j + l);
 
                         let tol_lower = if is_already_captured { 0.985 } else { 0.99 };
                         let tol_upper = if is_already_captured { 1.015 } else { 1.01 };
@@ -695,46 +693,24 @@ impl IcyDwarfInput {
                             resonance[inner][outer] = j;
                             resonance[outer][inner] = j;
 
-                            let dnorb_dt_inner;
-                            let dnorb_dt_outer;
+                            let dnorb_dt = |idx: usize| {
+                                -1.5 * (GCGS * m_prim).sqrt()
+                                    * world_states[idx].a_orb.powf(-2.5)
+                                    * prim_sign
+                                    * if reslock {
+                                        world_states[idx].a_orb / t_tide[idx]
+                                    } else {
+                                        3.0 * k2_prim
+                                            * (GCGS / m_prim).sqrt()
+                                            * r_prim.powi(5)
+                                            * self.worlds[idx].mass()
+                                            / q_prim
+                                            * world_states[idx].a_orb.powf(-5.5)
+                                    }
+                            };
 
-                            if reslock {
-                                dnorb_dt_inner = -1.5
-                                    * (GCGS * m_prim).sqrt()
-                                    * world_states[inner].a_orb.powf(-2.5)
-                                    * prim_sign
-                                    * world_states[inner].a_orb
-                                    / t_tide[inner];
-                                dnorb_dt_outer = -1.5
-                                    * (GCGS * m_prim).sqrt()
-                                    * world_states[outer].a_orb.powf(-2.5)
-                                    * prim_sign
-                                    * world_states[outer].a_orb
-                                    / t_tide[outer];
-                            } else {
-                                dnorb_dt_inner = -1.5
-                                    * (GCGS * m_prim).sqrt()
-                                    * world_states[inner].a_orb.powf(-2.5)
-                                    * prim_sign
-                                    * 3.0
-                                    * k2_prim
-                                    * (GCGS / m_prim).sqrt()
-                                    * r_prim.powi(5)
-                                    * self.worlds[inner].mass()
-                                    / q_prim
-                                    * world_states[inner].a_orb.powf(-5.5);
-                                dnorb_dt_outer = -1.5
-                                    * (GCGS * m_prim).sqrt()
-                                    * world_states[outer].a_orb.powf(-2.5)
-                                    * prim_sign
-                                    * 3.0
-                                    * k2_prim
-                                    * (GCGS / m_prim).sqrt()
-                                    * r_prim.powi(5)
-                                    * self.worlds[outer].mass()
-                                    / q_prim
-                                    * world_states[outer].a_orb.powf(-5.5);
-                            }
+                            let dnorb_dt_inner = dnorb_dt(inner);
+                            let dnorb_dt_outer = dnorb_dt(outer);
 
                             if j * dnorb_dt_inner <= (j + l) * dnorb_dt_outer {
                                 let p_cap =
@@ -762,20 +738,14 @@ impl IcyDwarfInput {
 
         // Find the min order of resonance for each moon and the number of moons
         // involved in resonances of this order
+
+        // Copy only the lowest-order resonances for each moon
         for i in 0..nmoons {
             if resonance[i] > 0.0 && resonance[i] <= res_min {
                 res_min = resonance[i];
             }
-        }
-        for i in 0..nmoons {
             if resonance[i] == res_min {
                 nbres += 1;
-            }
-        }
-
-        // Copy only the lowest-order resonances for each moon
-        for i in 0..nmoons {
-            if resonance[i] == res_min {
                 res_acct_for[i] = resonance[i];
             }
         }
