@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use crate::{
     consts::*,
     crack, create_output,
-    input::{IcyDwarfInput, IcyWorld, TidalQ, WorldSpec},
+    input::{Fracs, IcyDwarfInput, IcyWorld, TidalQ, WorldSpec},
 };
 
 // pub fn planet_system(parsed: &ParsedInput) {
@@ -49,7 +49,7 @@ pub struct ZoneState {
 }
 
 impl ZoneState {
-    pub fn volumes(&self) -> (f64, (f64, f64, f64, f64, f64)) {
+    pub fn volumes(&self) -> (f64, Fracs) {
         // Volume = outer vol - inner vol
         //        = pi (r + dr)^2 - pi r^2
         //        = pi ((r + dr)^2 - r^2)
@@ -59,12 +59,12 @@ impl ZoneState {
         let (f_rock, f_ice, f_as, f_water, f_al) = self.fracs();
         (
             total_vol,
-            (
-                total_vol / f_rock,
-                total_vol / f_ice,
-                total_vol / f_as,
-                total_vol / f_water,
-                total_vol / f_al,
+            Fracs(
+                total_vol * f_rock,
+                total_vol * f_ice,
+                total_vol * f_as,
+                total_vol * f_water,
+                total_vol * f_al,
             ),
         )
     }
@@ -358,7 +358,7 @@ impl IcyDwarfInput {
         };
         real_time -= dtime;
 
-        for _itime in 0..=n_time {
+        for _ in 0..=n_time {
             real_time += dtime;
             let q_prim = self.primary_world.tidal_q.q_prim(&self.worlds, real_time);
 
