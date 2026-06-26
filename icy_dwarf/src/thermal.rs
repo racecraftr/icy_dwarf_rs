@@ -7,23 +7,22 @@ use std::{
 use crate::{
     FloatMat,
     consts::{
-        CM, E_YOUNG_OLIV, E_YOUNG_SERP, GCGS, GRAM, KM2CM, NU_POISSON_OLIV, NU_POISSON_SERP, PA2BA,
-        PI_GREEK,
+        CM, E_YOUNG_OLIV, E_YOUNG_SERP, GCGS, GRAM, KM, KM2CM, NU_POISSON_OLIV, NU_POISSON_SERP,
+        PA2BA, PI_GREEK,
     },
     input::{Fracs, IcyDwarfInput},
     planet_system::{RHO_ADHS_TH, RHO_H2OL_TH, RHO_H2OS_TH, RHO_NH3L_TH, WorldState, ZoneState},
     to_faer_mat,
 };
-use extendr_api::ToVectorValue;
 use faer::{Mat, linalg::solvers::DenseSolveCore, prelude::Solve};
 use itertools::Itertools;
 use num::{
-    complex::Complex64,
+    complex::{Complex64, ComplexFloat},
     pow::Pow,
-    traits::{ConstZero, Inv},
+    traits::Inv,
 };
 
-pub const N_THERM: usize = 14;
+const K: f64 = 200.0e9 / GRAM * CM;
 
 impl IcyDwarfInput {
     pub fn thermal(&self, world_states: &mut [WorldState], dtime: f64) {
@@ -59,7 +58,7 @@ impl IcyDwarfInput {
             m_acc[i] = zone.mass_total + if i == 0 { 0. } else { m_acc[i - 1] };
             g_vec[i] = GCGS * m_acc[i] / (zone.radius + zone.dr).powi(2);
             let z = if i < world_state.zones.len() - 1 {
-                &zone
+                zone
             } else {
                 &world_state.zones[world_state.zones.len() - 2]
             };
@@ -108,7 +107,7 @@ impl IcyDwarfInput {
                 0.5 => 0.886227,
                 _ => exit(0),
             };
-            let cond = world_state.omega.abs() < 100. * D_EPS;
+            // let cond = world_state.omega.abs() < 100. * D_EPS;
             let cond_i = |n: f64| {
                 if world_state.omega.abs() < 100. * D_EPS {
                     Complex64::ZERO
@@ -181,6 +180,52 @@ impl IcyDwarfInput {
             &shearmod,
             0,
         );
+
+        let (e2, e4, e6, e8, e10) = world_state.ecc();
+        let eterm_1 = e10 * (2555911.0 / 122880.0) - e8 * (63949.0 / 2304.0) + e6 * (551.0 / 12.0)
+            - e4 * (101.0 / 4.0)
+            + e2 * 7.0;
+        let eterm_2 = e10 * (-171083.0 / 320.0) + e8 * (339187.0 / 576.0) - e6 * (3847.0 / 12.0)
+            + e4 * (605.0 / 8.0);
+        let eterm_3 =
+            e10 * (368520907.0 / 81920.0) - e8 * (1709915.0 / 768.0) + e6 * (2855.0 / 6.0);
+        let eterm_4 = e10 * (-66268493.0 / 5760.0) + e8 * (2592379.0 / 1152.0);
+        let eterm_5 = e10 * (6576742601.0 / 737280.0);
+        let eterm = match self.world_spec.ecc_model {
+            crate::input::EccModel::E2 => e2,
+            crate::input::EccModel::E10Cpl => eterm_1 + eterm_2 + eterm_3 + eterm_4 + eterm_5,
+            crate::input::EccModel::E10Ctl => {
+                eterm_1 + 2. * eterm_2 + 3. * eterm_3 + 4. * eterm_4 + 5. * eterm_5
+            }
+        } / 7.;
+
+        for (idx, zone) in world_state.zones.iter().enumerate().skip(1) {
+            let r_out = zone.radius + zone.dr;
+            let x = 2. * y_tide[idx][0] - 6. * y_tide[idx][1];
+            let h_mu = 4. / 3.
+                * (r_out / (K + 4. / 3. * shearmod[idx]).abs()
+                    * (y_tide[idx][2] - (K - 2. / 3. * shearmod[idx]) / r_out * x)
+                        .abs()
+                        .powi(2)
+                    - r_out * ((y_tide[idx][0].conj() - y_tide[idx][1].conj()) / r_out * x).re
+                    + 1. / 3. * x.abs().powi(2)
+                    + 6. * (r_out * y_tide[idx][3].abs() / shearmod[idx].abs()).powi(2)
+                    + 24. * y_tide[idx][1].abs().powi(2));
+
+            let w_tide = if self.world_spec.tidal_heating {
+                zone.volumes().0
+                    * 2.
+                    * world_state.omega.powi(5)
+                    * world_state.zones.last().unwrap().radius.powi(4)
+                    * (eterm + world_state.obl.sin() / 7.)
+                    / r_out.powi(2)
+                    * h_mu
+                    * shearmod[idx].im
+            } else {
+                0.
+            };
+            world_state.w_tide_tot += w_tide;
+        }
     }
 
     pub fn calculate_pressure(&self, world: &mut WorldState) {
@@ -189,10 +234,8 @@ impl IcyDwarfInput {
 
         for (i, zone) in world.zones.iter().enumerate() {
             cumulative_mass += zone.mass_total;
-            gravity[i] = crate::consts::GCGS * cumulative_mass * crate::consts::GRAM
-                / zone.radius.powi(2)
-                * crate::consts::KM2CM.powi(2)
-                / crate::consts::KM.powi(2);
+            gravity[i] =
+                GCGS * cumulative_mass * GRAM / zone.radius.powi(2) * KM2CM.powi(2) / KM.powi(2);
         }
 
         if let Some(last) = world.zones.last_mut() {
@@ -239,16 +282,12 @@ impl IcyDwarfInput {
             let v_rock = zone.mass_rock
                 / (zone.x_hydr * self.world_spec.rho_hydr_th()
                     + (1.0 - zone.x_hydr) * self.world_spec.rho_rock_th());
-            let d_vol =
-                4.0 / 3.0 * std::f64::consts::PI * (r_old[ir + 1].powi(3) - r_old[ir].powi(3));
+            let d_vol = zone.volumes().0;
 
             let x_ice = 1.0 - v_rock / d_vol;
             let c_rate = creep(zone.temp, zone.pressure, x_ice, zone.porosity, zone.x_hydr);
             zone.porosity -= dtime * (1.0 - zone.porosity) * c_rate;
-            if zone.porosity < 0.0 {
-                zone.porosity = 0.0;
-            }
-            if zone.mass_rock < 0.01 && zone.mass_water > 0.01 {
+            if zone.porosity < 0. || zone.mass_rock < 0.01 && zone.mass_water > 0.01 {
                 zone.porosity = 0.0;
             }
         }
@@ -265,10 +304,6 @@ impl IcyDwarfInput {
             current_r = next_r;
         }
     }
-
-    fn hydrate(&self) {}
-
-    fn prop_mtx(&self) {}
 }
 
 impl WorldState {
@@ -292,7 +327,37 @@ impl ZoneState {
     }
 }
 
-pub fn creep(t: f64, p: f64, x_ice: f64, porosity: f64, x_hydr: f64) -> f64 {
+impl ZoneState {
+    pub fn viscosity(&self) -> f64 {
+        let x = self.mass_ammonia_liquid / self.mass_water;
+        let (a, b) = if self.temp > 240.0 {
+            [
+                (-10.8143, 1819.86),
+                (0.711062, 250.822),
+                (-22.4943, 6505.25),
+                (41.8343, 14923.4),
+                (18.5149, 7141.76),
+            ]
+        } else {
+            [
+                (-13.8628, 2701.73),
+                (-68.7617, 14973.3),
+                (230.038, -46174.5),
+                (-249.897, 45967.7),
+                (0., 0.),
+            ]
+        }
+        .iter()
+        .enumerate()
+        .fold((0., 0.), |(a, b), (k, (a_t, b_t))| {
+            let x_pow = x.powi(k as i32);
+            (a + a_t * x_pow, b + b_t * x_pow)
+        });
+        (a + b / self.temp).exp()
+    }
+}
+
+fn creep(t: f64, p: f64, x_ice: f64, porosity: f64, x_hydr: f64) -> f64 {
     use crate::consts::{D_FLOW_LAW, MPA, R_G};
     let eff_p = p / MPA / (1.0 - porosity);
 
@@ -309,24 +374,21 @@ pub fn creep(t: f64, p: f64, x_ice: f64, porosity: f64, x_hydr: f64) -> f64 {
 
     let creep_rate_ice = eps_diff + 1.0 / (1.0 / eps_basal + 1.0 / eps_gbs) + eps_disl;
 
-    if x_ice > 0.3 {
-        creep_rate_ice
-    } else {
-        let t_eff = if t > 140.0 { t } else { 140.0 };
-        let creep_rate_hydr = 10.0_f64.powf(5.62)
-            * eff_p.powi(1)
-            * D_FLOW_LAW.powi(-3)
-            * (-240.0e3 / (R_G * t_eff)).exp();
-        let creep_rate_dry = 10.0_f64.powf(5.25)
-            * eff_p.powi(1)
-            * D_FLOW_LAW.powf(-2.98)
-            * (-261.0e3 / (R_G * t_eff)).exp();
+    creep_rate_ice
+        * if x_ice > 0.3 {
+            1.
+        } else {
+            let t_eff = t.max(140.);
+            let creep_rate_hydr =
+                416869.3834703355 * eff_p * D_FLOW_LAW.powi(-3) * (-240.0e3 / (R_G * t_eff)).exp();
+            let creep_rate_dry = 177827.94100389228
+                * eff_p
+                * D_FLOW_LAW.powf(-2.98)
+                * (-261.0e3 / (R_G * t_eff)).exp();
 
-        (((0.3 - x_ice) * (x_hydr * creep_rate_hydr + (1.0 - x_hydr) * creep_rate_dry).ln()
-            + x_ice * creep_rate_ice.ln())
-            / 0.3)
-            .exp()
-    }
+            (x_hydr * creep_rate_hydr + (1. - x_hydr) * creep_rate_dry)
+                * (0.3 + 7. / 3. * x_ice).exp()
+        }
 }
 
 pub fn prop_mtx(
@@ -340,7 +402,7 @@ pub fn prop_mtx(
     if nr == 0 {
         return Vec::new();
     }
-    assert!(r.len() >= nr + 1);
+    assert!(r.len() >= nr);
     assert!(g.len() >= nr);
     assert!(shearmod.len() >= nr);
 
@@ -364,100 +426,118 @@ pub fn prop_mtx(
         let four_pi_g_rho = Complex64::from(4.0 * PI_GREEK * GCGS * rho[ir]);
         let two_pi_g_rho = Complex64::from(2.0 * PI_GREEK * GCGS * rho[ir]);
 
-        ypropmtx[ir][0][0] = Complex64::from(r_val_3 / 7.0);
-        ypropmtx[ir][1][0] = Complex64::from(5.0 * r_val_3 / 42.0);
-        ypropmtx[ir][2][0] = (rho_g_r - sm) * Complex64::from(r_val_2 / 7.0);
-        ypropmtx[ir][3][0] = sm * Complex64::from(8.0 * r_val_2 / 21.0);
-        ypropmtx[ir][4][0] = Complex64::ZERO;
-        ypropmtx[ir][5][0] = four_pi_g_rho * Complex64::from(r_val_3 / 7.0);
-
-        ypropmtx[ir][0][1] = Complex64::from(r_val);
-        ypropmtx[ir][1][1] = Complex64::from(r_val / 2.0);
-        ypropmtx[ir][2][1] = rho_g_r + sm * 2.0;
-        ypropmtx[ir][3][1] = sm;
-        ypropmtx[ir][4][1] = Complex64::ZERO;
-        ypropmtx[ir][5][1] = four_pi_g_rho * Complex64::from(r_val);
-
-        ypropmtx[ir][0][2] = Complex64::ZERO;
-        ypropmtx[ir][1][2] = Complex64::ZERO;
-        ypropmtx[ir][2][2] = Complex64::from(-rho[ir] * r_val_2);
-        ypropmtx[ir][3][2] = Complex64::ZERO;
-        ypropmtx[ir][4][2] = Complex64::from(-r_val_2);
-        ypropmtx[ir][5][2] = Complex64::from(-5.0 * r_val);
-
-        ypropmtx[ir][0][3] = Complex64::from(1.0 / (2.0 * r_val_2));
-        ypropmtx[ir][1][3] = Complex64::ZERO;
-        ypropmtx[ir][2][3] = (rho_g_r - sm * 6.0) / Complex64::from(2.0 * r_val_3);
-        ypropmtx[ir][3][3] = sm / Complex64::from(2.0 * r_val_3);
-        ypropmtx[ir][4][3] = Complex64::ZERO;
-        ypropmtx[ir][5][3] = two_pi_g_rho / Complex64::from(r_val_2);
-
-        ypropmtx[ir][0][4] = Complex64::from(1.0 / r_val_4);
-        ypropmtx[ir][1][4] = Complex64::from(-1.0 / (3.0 * r_val_4));
-        ypropmtx[ir][2][4] = (rho_g_r - sm * 8.0) / Complex64::from(r_val_5);
-        ypropmtx[ir][3][4] = sm * Complex64::from(8.0 / (3.0 * r_val_5));
-        ypropmtx[ir][4][4] = Complex64::ZERO;
-        ypropmtx[ir][5][4] = four_pi_g_rho / Complex64::from(r_val_4);
-
-        ypropmtx[ir][0][5] = Complex64::ZERO;
-        ypropmtx[ir][1][5] = Complex64::ZERO;
-        ypropmtx[ir][2][5] = Complex64::from(-rho[ir] / r_val_3);
-        ypropmtx[ir][3][5] = Complex64::ZERO;
-        ypropmtx[ir][4][5] = Complex64::from(-1.0 / r_val_3);
-        ypropmtx[ir][5][5] = Complex64::ZERO;
-
         let rho_g_r_over_sm = rho_g_r / sm;
         let r_over_sm = Complex64::from(r_val) / sm;
 
-        ypropinv[ir][0][0] = rho_g_r_over_sm - 8.0;
-        ypropinv[ir][1][0] = -rho_g_r_over_sm + 6.0;
-        ypropinv[ir][2][0] = four_pi_g_rho;
-        ypropinv[ir][3][0] = rho_g_r_over_sm + 2.0;
-        ypropinv[ir][4][0] = -rho_g_r_over_sm + 1.0;
-        ypropinv[ir][5][0] = four_pi_g_rho * Complex64::from(r_val);
+        ypropmtx[ir] = [
+            [
+                Complex64::from(r_val_3 / 7.0),
+                Complex64::from(r_val),
+                Complex64::ZERO,
+                Complex64::from(1.0 / (2.0 * r_val_2)),
+                Complex64::from(1.0 / r_val_4),
+                Complex64::ZERO,
+            ],
+            [
+                Complex64::from(5.0 * r_val_3 / 42.0),
+                Complex64::from(r_val / 2.0),
+                Complex64::ZERO,
+                Complex64::ZERO,
+                Complex64::from(-1.0 / (3.0 * r_val_4)),
+                Complex64::ZERO,
+            ],
+            [
+                (rho_g_r - sm) * Complex64::from(r_val_2 / 7.0),
+                rho_g_r + sm * 2.0,
+                Complex64::from(-rho[ir] * r_val_2),
+                (rho_g_r - sm * 6.0) / Complex64::from(2.0 * r_val_3),
+                (rho_g_r - sm * 8.0) / Complex64::from(r_val_5),
+                Complex64::from(-rho[ir] / r_val_3),
+            ],
+            [
+                sm * Complex64::from(8.0 * r_val_2 / 21.0),
+                sm,
+                Complex64::ZERO,
+                sm / Complex64::from(2.0 * r_val_3),
+                sm * Complex64::from(8.0 / (3.0 * r_val_5)),
+                Complex64::ZERO,
+            ],
+            [
+                Complex64::ZERO,
+                Complex64::ZERO,
+                Complex64::from(-r_val_2),
+                Complex64::ZERO,
+                Complex64::ZERO,
+                Complex64::from(-1.0 / r_val_3),
+            ],
+            [
+                four_pi_g_rho * Complex64::from(r_val_3 / 7.0),
+                four_pi_g_rho * Complex64::from(r_val),
+                Complex64::from(-5.0 * r_val),
+                two_pi_g_rho / Complex64::from(r_val_2),
+                four_pi_g_rho / Complex64::from(r_val_4),
+                Complex64::ZERO,
+            ],
+        ];
 
-        ypropinv[ir][0][1] = Complex64::from(16.0);
-        ypropinv[ir][1][1] = Complex64::from(-6.0);
-        ypropinv[ir][2][1] = Complex64::ZERO;
-        ypropinv[ir][3][1] = Complex64::from(6.0);
-        ypropinv[ir][4][1] = Complex64::from(-16.0);
-        ypropinv[ir][5][1] = Complex64::ZERO;
-
-        ypropinv[ir][0][2] = -r_over_sm;
-        ypropinv[ir][1][2] = r_over_sm;
-        ypropinv[ir][2][2] = Complex64::ZERO;
-        ypropinv[ir][3][2] = -r_over_sm;
-        ypropinv[ir][4][2] = r_over_sm;
-        ypropinv[ir][5][2] = Complex64::ZERO;
-
-        ypropinv[ir][0][3] = r_over_sm * 2.0;
-        ypropinv[ir][1][3] = Complex64::ZERO;
-        ypropinv[ir][2][3] = Complex64::ZERO;
-        ypropinv[ir][3][3] = r_over_sm * -3.0;
-        ypropinv[ir][4][3] = r_over_sm * 5.0;
-        ypropinv[ir][5][3] = Complex64::ZERO;
-
-        ypropinv[ir][0][4] = Complex64::from(rho[ir]) * r_over_sm;
-        ypropinv[ir][1][4] = -Complex64::from(rho[ir]) * r_over_sm;
-        ypropinv[ir][2][4] = Complex64::ZERO;
-        ypropinv[ir][3][4] = Complex64::from(rho[ir]) * r_over_sm;
-        ypropinv[ir][4][4] = -Complex64::from(rho[ir]) * r_over_sm;
-        ypropinv[ir][5][4] = Complex64::from(5.0);
-
-        ypropinv[ir][0][5] = Complex64::ZERO;
-        ypropinv[ir][1][5] = Complex64::ZERO;
-        ypropinv[ir][2][5] = Complex64::from(-1.0);
-        ypropinv[ir][3][5] = Complex64::ZERO;
-        ypropinv[ir][4][5] = Complex64::ZERO;
-        ypropinv[ir][5][5] = Complex64::from(-r_val);
+        ypropinv[ir] = [
+            [
+                rho_g_r_over_sm - 8.0,
+                Complex64::from(16.0),
+                -r_over_sm,
+                r_over_sm * 2.0,
+                Complex64::from(rho[ir]) * r_over_sm,
+                Complex64::ZERO,
+            ],
+            [
+                -rho_g_r_over_sm + 6.0,
+                Complex64::from(-6.0),
+                r_over_sm,
+                Complex64::ZERO,
+                -Complex64::from(rho[ir]) * r_over_sm,
+                Complex64::ZERO,
+            ],
+            [
+                four_pi_g_rho,
+                Complex64::ZERO,
+                Complex64::ZERO,
+                Complex64::ZERO,
+                Complex64::ZERO,
+                Complex64::from(-1.0),
+            ],
+            [
+                rho_g_r_over_sm + 2.0,
+                Complex64::from(6.0),
+                -r_over_sm,
+                r_over_sm * -3.0,
+                Complex64::from(rho[ir]) * r_over_sm,
+                Complex64::ZERO,
+            ],
+            [
+                -rho_g_r_over_sm + 1.0,
+                Complex64::from(-16.0),
+                r_over_sm,
+                r_over_sm * 5.0,
+                -Complex64::from(rho[ir]) * r_over_sm,
+                Complex64::ZERO,
+            ],
+            [
+                four_pi_g_rho * Complex64::from(r_val),
+                Complex64::ZERO,
+                Complex64::ZERO,
+                Complex64::ZERO,
+                Complex64::from(5.0),
+                Complex64::from(-r_val),
+            ],
+        ];
 
         for j in 0..6 {
-            ypropinv[ir][0][j] = ypropinv[ir][0][j] * Complex64::from(3.0 / (5.0 * r_val_3));
-            ypropinv[ir][1][j] = ypropinv[ir][1][j] * Complex64::from(1.0 / (5.0 * r_val));
-            ypropinv[ir][2][j] = ypropinv[ir][2][j] * Complex64::from(1.0 / (5.0 * r_val));
-            ypropinv[ir][3][j] = ypropinv[ir][3][j] * Complex64::from(2.0 * r_val_2 / 5.0);
-            ypropinv[ir][4][j] = ypropinv[ir][4][j] * Complex64::from(3.0 * r_val_4 / 35.0);
-            ypropinv[ir][5][j] = ypropinv[ir][5][j] * Complex64::from(-r_val_3 / 5.0);
+            ypropinv[ir][0][j] *= Complex64::from(3.0 / (5.0 * r_val_3));
+            ypropinv[ir][1][j] *= Complex64::from(1.0 / (5.0 * r_val));
+            ypropinv[ir][2][j] *= Complex64::from(1.0 / (5.0 * r_val));
+            ypropinv[ir][3][j] *= Complex64::from(2.0 * r_val_2 / 5.0);
+            ypropinv[ir][4][j] *= Complex64::from(3.0 * r_val_4 / 35.0);
+            ypropinv[ir][5][j] *= Complex64::from(-r_val_3 / 5.0);
         }
     }
 
@@ -487,24 +567,10 @@ pub fn prop_mtx(
         }
     }
 
-    let mbc = vec![
-        vec![
-            bpropmtx[nr - 1][2][0],
-            bpropmtx[nr - 1][2][1],
-            bpropmtx[nr - 1][2][2],
-        ],
-        vec![
-            bpropmtx[nr - 1][3][0],
-            bpropmtx[nr - 1][3][1],
-            bpropmtx[nr - 1][3][2],
-        ],
-        vec![
-            bpropmtx[nr - 1][5][0],
-            bpropmtx[nr - 1][5][1],
-            bpropmtx[nr - 1][5][2],
-        ],
-    ];
-
+    let mbc = [2, 3, 5]
+        .iter()
+        .map(|&idx| bpropmtx[nr - 1][idx][0..=2].to_vec())
+        .collect::<Vec<_>>();
     let bsurf = vec![
         Complex64::ZERO,
         Complex64::ZERO,
@@ -599,7 +665,7 @@ type ThermVol = (f64, (f64, f64, f64, f64, f64));
 
 impl ThermalOut {
     fn from_line(ln: &str) -> Option<Self> {
-        let parts = ln.trim().split_whitespace().collect::<Vec<_>>();
+        let parts = ln.split_whitespace().collect::<Vec<_>>();
         let radius_km = parts[0].parse::<f64>().ok()?;
         let radius_km = radius_km * KM2CM;
         Some(Self {
@@ -621,7 +687,11 @@ impl ThermalOut {
     }
 
     pub fn mass_total(&self) -> f64 {
-        self.mass_rock + self.mass_ice + self.mass_ammonia_solid + self.mass_ammonia_liquid
+        self.mass_rock
+            + self.mass_ice
+            + self.mass_ammonia_solid
+            + self.mass_ammonia_liquid
+            + self.mass_water
     }
 
     pub fn vol(&self, input: &IcyDwarfInput) -> (f64, Fracs) {
@@ -635,6 +705,17 @@ impl ThermalOut {
         (
             vol_rock + vol_adhs + vol_water + vol_nh3l,
             Fracs(vol_rock, vol_ice, vol_adhs, vol_water, vol_nh3l),
+        )
+    }
+
+    pub fn fracs(&self) -> Fracs {
+        let mass_total = self.mass_total();
+        Fracs(
+            self.mass_rock / mass_total,
+            self.mass_ice / mass_total,
+            self.mass_ammonia_solid / mass_total,
+            self.mass_water / mass_total,
+            self.mass_ammonia_liquid / mass_total,
         )
     }
 }
