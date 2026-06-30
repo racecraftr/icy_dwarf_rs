@@ -1,3 +1,5 @@
+use crate::consts::{G, KM, KM2CM, RHO_ADHS, RHO_H2OL, RHO_H2OS, RHO_NH3L};
+use crate::input::Fracs;
 use crate::{consts::GRAM, input::IcyDwarfInput, thermal::ThermalOut};
 use extendr_api::prelude::*;
 use std::fs::{self, File};
@@ -54,22 +56,12 @@ impl IcyDwarfInput {
         for ir in 0..nr {
             let zone = &thermal_out[ir][t];
             let d_m = zone.mass_total();
-            frock[ir] = zone.mass_rock / d_m;
-            fh2os[ir] = zone.mass_ice / d_m;
-            fh2ol[ir] = zone.mass_water / d_m;
-            fadhs[ir] = zone.mass_ammonia_solid / d_m;
-            fnh3l[ir] = zone.mass_ammonia_liquid / d_m;
-
+            Fracs(frock[ir], fh2os[ir], fadhs[ir], fh2ol[ir], fnh3l[ir]) = zone.fracs();
             m[ir] = if ir > 0 { m[ir - 1] + d_m } else { d_m };
         }
 
         for ir in 0..nr {
-            g[ir] = crate::consts::G * m[ir] * crate::consts::GRAM
-                / (r_bound[ir + 1] * r_bound[ir + 1])
-                * crate::consts::KM2CM
-                * crate::consts::KM2CM
-                / crate::consts::KM
-                / crate::consts::KM;
+            g[ir] = G * m[ir] * (KM2CM / KM / r_bound[ir + 1]).powi(2);
         }
 
         pressure[nr - 1] = 0.0;
@@ -85,10 +77,10 @@ impl IcyDwarfInput {
                     * (frock[ir + 1]
                         * (zone_curr.deg_of_hydr * rho_hydr
                             + (1.0 - zone_curr.deg_of_hydr) * rho_dry)
-                        + fh2os[ir + 1] * crate::consts::RHO_H2OS
-                        + fh2ol[ir + 1] * crate::consts::RHO_H2OL
-                        + fadhs[ir + 1] * crate::consts::RHO_ADHS
-                        + fnh3l[ir + 1] * crate::consts::RHO_NH3L);
+                        + fh2os[ir + 1] * RHO_H2OS
+                        + fh2ol[ir + 1] * RHO_H2OL
+                        + fadhs[ir + 1] * RHO_ADHS
+                        + fnh3l[ir + 1] * RHO_NH3L);
         }
 
         pressure
@@ -123,8 +115,7 @@ impl IcyDwarfInput {
         }
 
         let r_hydrostatic = (r_seafloor_idx as f64
-            + crate::consts::RHO_H2OS / crate::consts::RHO_H2OL
-                * (r_diff as f64 - r_seafloor_idx as f64))
+            + RHO_H2OS / RHO_H2OL * (r_diff as f64 - r_seafloor_idx as f64))
             .floor() as i32;
 
         let species = [
