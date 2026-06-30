@@ -1,6 +1,5 @@
 use crate::consts::{KELVIN, NAQ, NELTS, NGASES, NMINGAS, NVAR};
 use extendr_api::prelude::*;
-use extendr_engine::*;
 use std::fs;
 
 /// Simulates water-rock interactions using PHREEQC.
@@ -90,8 +89,6 @@ pub fn water_rock(path: &str, t: f64, p: f64, mut wr: f64, chondrite: i32) -> Re
         DestroyIPhreeqc(id);
     }
     */
-
-    unsafe {}
 
     let mass_water = 0.0; // TODO: Extract from IPhreeqc
     let total_k = 0.0; // TODO: Calculate based on chondrite type and extracted molmass
