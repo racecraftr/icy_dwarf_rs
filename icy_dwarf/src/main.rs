@@ -6,6 +6,7 @@ mod input;
 mod orbit;
 mod planet_system;
 mod thermal;
+mod traits;
 mod tropf;
 mod water_rock;
 
