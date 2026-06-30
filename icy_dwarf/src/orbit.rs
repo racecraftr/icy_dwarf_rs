@@ -308,11 +308,10 @@ impl IcyDwarfInput {
                 w_im.cr_epep_old = cr_epep;
                 w_i.cr_epep_old = cr_epep;
 
-                if e0 < 0.0 || e0 > 1.0 || e1 < 0.0 || e1 > 1.0 {
+                if [e0, e1].iter().any(|&e| (0..=1).contains(&(e as i32))) {
                     use std::fs::OpenOptions;
                     use std::io::Write;
                     if let Ok(mut file) = OpenOptions::new()
-                        .write(true)
                         .append(true)
                         .open("Outputs/Resonances.txt")
                     {
@@ -328,16 +327,11 @@ impl IcyDwarfInput {
                         e0,
                         e1
                     );
-                    std::process::exit(0);
+                    std::process::exit(1);
                 }
 
                 w_im.n_orb = if w_im.a_orb > 0.0 {
                     (GCGS * m_prim / w_im.a_orb.powi(3)).sqrt()
-                } else {
-                    0.0
-                };
-                w_i.n_orb = if w_i.a_orb > 0.0 {
-                    (GCGS * m_prim / w_i.a_orb.powi(3)).sqrt()
                 } else {
                     0.0
                 };
@@ -434,24 +428,20 @@ impl IcyDwarfInput {
                     * tau_p
                     * (GCGS * mass_moon * mass_moon / r_prim)
                     * (r_prim / aorb_im).powi(6)
-                    * norb_im
-                    * norb_im;
+                    * norb_im.powi(2);
                 let k_m = 3.0
                     * world_states[world_idx].k2
                     * tau_m
-                    * (GCGS * m_prim * m_prim / rad_moon)
+                    * (GCGS * m_prim.powi(2) / rad_moon)
                     * (rad_moon / aorb_im).powi(6)
-                    * norb_im
-                    * norb_im;
+                    * norb_im.powi(2);
 
                 let x_p = world_states[world_idx].i_orb.cos();
                 let x_m = world_states[world_idx].obl.cos();
 
-                let n_prim = if self.primary_world.spin_period > 0.0 {
-                    2.0 * std::f64::consts::PI / (self.primary_world.spin_period * 3600.0)
-                } else {
-                    0.0
-                };
+                let n_prim = (2.0 * std::f64::consts::PI
+                    / (self.primary_world.spin_period * 3600.0))
+                    .max(0.);
 
                 let eta_p = if aorb_im > 0.0 && norb_im > 0.0 && term_e > 0.0 {
                     (m_prim + mass_moon) / (m_prim * mass_moon) * i_p * n_prim
@@ -482,14 +472,14 @@ impl IcyDwarfInput {
                 let o_e_val = (1.0 + 3.0 * e2 + 3.0 / 8.0 * e4) / (1.0 - e2).powf(4.5);
 
                 let d_a_pl = if norb_im > 0.0 {
-                    4.0 * aorb_im * aorb_im / (GCGS * m_prim * mass_moon)
+                    4.0 * aorb_im.powi(2) / (GCGS * m_prim * mass_moon)
                         * k_p
                         * (n_val * x_p * n_prim / norb_im - n_a)
                 } else {
                     0.0
                 };
                 let d_a_moon = if norb_im > 0.0 {
-                    4.0 * aorb_im * aorb_im / (GCGS * m_prim * mass_moon)
+                    4.0 * aorb_im.powi(2) / (GCGS * m_prim * mass_moon)
                         * k_m
                         * (n_val * x_m * world_states[world_idx].spin / norb_im - n_a)
                 } else {
@@ -628,11 +618,9 @@ impl IcyDwarfInput {
                 world_states[world_idx].e_orb = 0.0;
             }
 
-            world_states[world_idx].n_orb = if world_states[world_idx].a_orb > 0.0 {
-                (GCGS * m_prim / world_states[world_idx].a_orb.powi(3)).sqrt()
-            } else {
-                0.0
-            };
+            world_states[world_idx].n_orb = (GCGS * m_prim / world_states[world_idx].a_orb.powi(3))
+                .sqrt()
+                .max(0.) // we can do this because if the sqrt() returns NaN, then 0 is returned instead.
         }
     }
 
@@ -955,10 +943,7 @@ pub fn mmr_avg_ham(_x: f64, y: &[f64], params: &MmrAvgHamParams) -> Vec<f64> {
         n[im] = (GCGS * params.m_prim / a[im].powi(3)).sqrt();
     }
 
-    let mut dhk = [0.0; 2];
-    for im in 0..2 {
-        dhk[im] = (1.0 - params.j) * n[0] + params.j * n[1];
-    }
+    let dhk = [(1.0 - params.j) * n[0] + params.j * n[1]; 2];
 
     let mut delta_n = [0.0; 2];
     let mut omdot = [0.0; 2];
@@ -1095,14 +1080,11 @@ pub fn mmr_avg_ham(_x: f64, y: &[f64], params: &MmrAvgHamParams) -> Vec<f64> {
         - params.j * dl_tide[0] * sigbar[0];
 
     let denom = 1.0 + (1.0 - params.j) * sigbar[0] + params.j * sigbar[1];
-    for im in 0..2 {
-        d_lambda_tide[im] /= denom;
-    }
+    d_lambda_tide.iter_mut().for_each(|n| {
+        *n /= denom;
+    });
 
-    let mut da_ = [0.0; 2];
-    for im in 0..2 {
-        da_[im] = 2.0 * a_[im] / lambda[im] * d_lambda_tide[im];
-    }
+    let da_ = [0, 1].map(|im| 2.0 * a_[im] / lambda[im] * d_lambda_tide[im]);
 
     vec![dh[0], dk[0], da_[0], dh[1], dk[1], da_[1]]
 }
