@@ -591,6 +591,7 @@ pub fn prop_mtx(
         }
     } else {
         eprintln!("Thermal: Singular matrix in GaussJordan (prop_mtx)");
+        exit(1);
     }
 
     ytide
@@ -598,7 +599,7 @@ pub fn prop_mtx(
 
 /// Calculates the single value decomposition of a mxn matrix.
 /// Retunrs, in order: U, Sigma, V^*.
-fn svd(mat: &Vec<Vec<f64>>) -> Option<(FloatMat, FloatMat, FloatMat)> {
+fn svd(mat: &[Vec<f64>]) -> Option<(FloatMat, FloatMat, FloatMat)> {
     let rows = mat.len();
     let cols = mat[0].len();
     let svd = to_faer_mat(mat)?.svd().ok()?;
@@ -635,14 +636,6 @@ fn gauss_jordan(
     Some((x, a_inv))
 }
 
-#[cfg(test)]
-mod gauss_jordan_tests {
-    use super::*;
-
-    #[test]
-    fn test_1() {}
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct ThermalOut {
     pub radius_km: f64,
@@ -664,7 +657,7 @@ pub struct ThermalOut {
 type ThermVol = (f64, (f64, f64, f64, f64, f64));
 
 impl ThermalOut {
-    fn from_line(ln: &str) -> Option<Self> {
+    pub fn from_line(ln: &str) -> Option<Self> {
         let parts = ln.split_whitespace().collect::<Vec<_>>();
         let radius_km = parts[0].parse::<f64>().ok()?;
         let radius_km = radius_km * KM2CM;
