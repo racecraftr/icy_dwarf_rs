@@ -1,4 +1,9 @@
-use std::{f64::consts::PI, fs, io::Write, path::PathBuf};
+use std::{
+    f64::consts::{FRAC_PI_3, PI},
+    fs,
+    io::Write,
+    path::PathBuf,
+};
 
 use itertools::Itertools;
 use num::traits::Inv;
@@ -8,6 +13,7 @@ use crate::{
     input::Fracs,
     planet_system::WorldState,
     thermal::ThermalOut,
+    traits::float_traits::FloatExt,
 };
 
 const FRAC_3_4PI: f64 = 0.75 / PI;
@@ -31,19 +37,22 @@ impl WorldState {
 
         let nr = self.zones.len();
 
-        let mut mp = 0.0;
-        let mut m_incore = 0.0;
-        let mut m_outcore = 0.0;
-
-        for v in thermal_outputs {
-            let out = &v[time_step];
-            mp += out.mass_total() * GRAM;
-            if out.deg_of_hydr < 0.1 {
-                m_incore += out.mass_rock * GRAM;
-            } else {
-                m_outcore += out.mass_rock * GRAM;
-            }
-        }
+        let (mp, (m_incore, m_outcore)) = thermal_outputs
+            .iter()
+            .map(|v| {
+                let out = &v[time_step];
+                (
+                    out.mass_total() * GRAM,
+                    if out.deg_of_hydr < 0.1 {
+                        (out.mass_rock * GRAM, 0.)
+                    } else {
+                        (0., out.mass_rock * GRAM)
+                    },
+                )
+            })
+            .fold((0., (0., 0.)), |(np, (ni, no)), (p, (i, o))| {
+                (np + p, (ni + i, no + o))
+            });
         let m_mantle = mp - m_incore - m_outcore;
 
         let vol_incore = m_incore / planmat_db[iincore].rho_0;
@@ -62,16 +71,10 @@ impl WorldState {
         let mut r = vec![0.0; nr + 1];
         let mut rho = vec![0.0; nr + 1];
 
-        if nic > 0 {
-            for ir in 0..=nic {
-                icomp[ir] = iincore;
-                r[ir] = r_incore * (ir as f64) / (nic as f64);
-                rho[ir] = planmat_db[icomp[ir]].rho_0;
-            }
-        } else {
-            icomp[0] = iincore;
-            r[0] = 0.0;
-            rho[0] = planmat_db[icomp[0]].rho_0;
+        for ir in 0..=nic {
+            icomp[ir] = iincore;
+            r[ir] = r_incore * ((ir as f64) / (nic as f64)).unwrap_or_nan(0.);
+            rho[ir] = planmat_db[icomp[ir]].rho_0;
         }
 
         if noc > nic {
@@ -96,7 +99,7 @@ impl WorldState {
         let mut d_m = vec![0.0; nr + 1];
         let mut m = vec![0.0; nr + 1];
         for ir in 1..=nr {
-            let vol = (PI / 0.75) * (r[ir].powi(3) - r[ir - 1].powi(3));
+            let vol = (4. * FRAC_PI_3) * (r[ir].powi(3) - r[ir - 1].powi(3));
             d_m[ir] = rho[ir] * vol;
             m[ir] = m[ir - 1] + d_m[ir];
         }
@@ -222,12 +225,9 @@ impl WorldState {
 
             delta = (rhonew[1] / rho[1] - 1.).abs();
 
-            for ir in 1..=nr {
-                rho[ir] = rhonew[ir] * mix + rho[ir] * (1.0 - mix);
-            }
-
             r[0] = 0.0;
             for ir in 1..=nr {
+                rho[ir] = rhonew[ir] * mix + rho[ir] * (1.0 - mix);
                 r[ir] = (0.75 * d_m[ir] / rho[ir] / PI + r[ir - 1].powi(3)).powf(1.0 / 3.0);
             }
 
@@ -237,7 +237,7 @@ impl WorldState {
         }
 
         let rp_final = r[nr];
-        let rhoavg = 0.75 * mp / PI / rp_final.powi(3);
+        let rhoavg = FRAC_3_4PI * rp_final.powi(3);
 
         let output_dir = PathBuf::from("Outputs");
         fs::create_dir_all(&output_dir).ok()?;
@@ -327,10 +327,9 @@ impl WorldState {
         for ir in 1..nr {
             m_cum[ir] = m_cum[ir - 1] + d_m_thermal[ir];
         }
-        let mut g_thermal = vec![0.0; nr];
-        for ir in 0..nr {
-            g_thermal[ir] = G * m_cum[ir] * GRAM / (r_thermal[ir + 1] / KM2CM * KM).powi(2);
-        }
+        let g_thermal = (0..nr)
+            .map(|ir| G * m_cum[ir] * GRAM / (r_thermal[ir + 1] / KM2CM * KM).powi(2))
+            .collect_vec();
 
         let mut p_thermal = vec![0.0; nr];
         p_thermal[nr - 1] = 0.0;
@@ -363,7 +362,7 @@ impl WorldState {
             let r_prev_km = out_prev.radius_km / KM2CM;
 
             let rho_val = d_m_thermal[ir] * GRAM
-                / (4.0 / 3.0 * PI * (r_curr_km.powi(3) - r_prev_km.powi(3)) * KM.powi(3));
+                / (4.0 * FRAC_PI_3 * (r_curr_km.powi(3) - r_prev_km.powi(3)) * KM.powi(3));
 
             writeln!(
                 fout,
