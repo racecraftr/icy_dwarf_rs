@@ -1,9 +1,12 @@
-use std::sync::LazyLock;
+use std::{f64::consts::FRAC_PI_3, sync::LazyLock};
+
+use itertools::Itertools;
 
 use crate::{
     consts::*,
     crack, create_output,
     input::{Fracs, IcyDwarfInput, IcyWorld, TidalQ, WorldSpec},
+    traits::float_traits::FloatExt,
 };
 
 // pub fn planet_system(parsed: &ParsedInput) {
@@ -96,19 +99,9 @@ impl ZoneState {
         let specific_energy = self.energy_total / self.mass_total;
         let (frock, mut fh2os, mut fadhs, mut fh2ol, mut fnh3l) = self.fracs();
 
-        let mut x = 0.0;
-        let mut gh2os = 0.0;
-        let mut gadhs = 0.0;
-        let mut gh2ol = 0.0;
-        let mut gnh3l = 0.0;
-
-        if frock < 1.0 {
-            gh2os = fh2os / (1.0 - frock);
-            gadhs = fadhs / (1.0 - frock);
-            gh2ol = fh2ol / (1.0 - frock);
-            gnh3l = fnh3l / (1.0 - frock);
-            x = gnh3l + XC * gadhs;
-        }
+        let [mut gh2os, mut gadhs, mut gh2ol, mut gnh3l] =
+            [fh2os, fadhs, fh2ol, fnh3l].map(|n| (n / (1.0 - frock)).unwrap_or_nan(0.));
+        let x = gnh3l + XC * gadhs;
 
         let mut t_lo = 20.0;
         let mut t_hi = 5000.0;
@@ -118,19 +111,19 @@ impl ZoneState {
             // Calculate Elo
             let tp = t_lo;
             let erock_lo = heat_rock(tp);
-            let (eice_lo, ..) = heat_ice(tp, x, x_salt);
+            let [eice_lo, ..] = heat_ice(tp, x, x_salt);
             let elo = frock * erock_lo + (1.0 - frock) * eice_lo;
 
             // Calculate Emd
             let tp = t_md;
             let erock_md = heat_rock(tp);
-            let (eice_md, gh2os_md, gadhs_md, gh2ol_md, gnh3l_md) = heat_ice(tp, x, x_salt);
+            let [eice_md, gh2os_md, gadhs_md, gh2ol_md, gnh3l_md] = heat_ice(tp, x, x_salt);
             let emd = frock * erock_md + (1.0 - frock) * eice_md;
 
             // Calculate Ehi
             let tp = t_hi;
             let erock_hi = heat_rock(tp);
-            let (eice_hi, ..) = heat_ice(tp, x, x_salt);
+            let [eice_hi, ..] = heat_ice(tp, x, x_salt);
             let ehi = frock * erock_hi + (1.0 - frock) * eice_hi;
 
             if specific_energy >= elo
@@ -161,17 +154,10 @@ impl ZoneState {
 
         self.temp = t_md;
 
-        if frock == 1.0 {
-            fh2os = 0.0;
-            fadhs = 0.0;
-            fh2ol = 0.0;
-            fnh3l = 0.0;
-        } else {
-            fh2os = (1.0 - frock) * gh2os;
-            fadhs = (1.0 - frock) * gadhs;
-            fh2ol = (1.0 - frock) * gh2ol;
-            fnh3l = (1.0 - frock) * gnh3l;
-        }
+        fh2os = (1.0 - frock) * gh2os;
+        fadhs = (1.0 - frock) * gadhs;
+        fh2ol = (1.0 - frock) * gh2ol;
+        fnh3l = (1.0 - frock) * gnh3l;
 
         self.mass_ice = self.mass_total * fh2os;
         self.mass_ammonia_solid = self.mass_total * fadhs;
@@ -251,55 +237,52 @@ impl IcyDwarfInput {
                     (1.0 - rho_ice / world.planetary_dens) / (1.0 - rho_ice / rho_rock_hydr);
 
                 let dr_grid = world.planetary_rad / (self.grid.n_zones as f64);
-                let mut zones = Vec::with_capacity(self.grid.n_zones);
-                let mut current_r = 0.0;
+                let zones = (0..self.grid.n_zones)
+                    .map(|ir| {
+                        let current_r = dr_grid * ir as f64;
+                        let next_r = current_r + dr_grid;
+                        let d_vol = 4.0 * FRAC_PI_3 * (next_r.powi(3) - current_r.powi(3));
+                        let d_m = d_vol * world.planetary_dens;
+                        let m_rock = d_m * frock_pm;
+                        let m_h2os = d_m * (1.0 - frock_pm) * (1.0 - world.ammonia / XC);
+                        let m_adhs = d_m * (1.0 - frock_pm) * (world.ammonia / XC);
 
-                for _ir in 0..self.grid.n_zones {
-                    let next_r = current_r + dr_grid;
-                    let d_vol = 4.0 / 3.0 * PI_GREEK * (next_r.powi(3) - current_r.powi(3));
-                    let d_m = d_vol * world.planetary_dens;
-                    let m_rock = d_m * frock_pm;
-                    let m_h2os = d_m * (1.0 - frock_pm) * (1.0 - world.ammonia / XC);
-                    let m_adhs = d_m * (1.0 - frock_pm) * (world.ammonia / XC);
+                        let e_rock = m_rock * heat_rock(world.temp_init);
+                        let e_h2os = m_h2os * QH2O * world.temp_init.powi(2) * 0.5;
+                        let e_slush = m_adhs * QADH * world.temp_init.powi(2) * 0.5;
+                        let d_e = e_rock + e_h2os + e_slush;
 
-                    let e_rock = m_rock * heat_rock(world.temp_init);
-                    let e_h2os = m_h2os * QH2O * world.temp_init * world.temp_init / 2.0;
-                    let e_slush = m_adhs * QADH * world.temp_init * world.temp_init / 2.0;
-                    let d_e = e_rock + e_h2os + e_slush;
+                        ZoneState {
+                            radius: next_r,
+                            dr: dr_grid,
+                            temp: world.temp_init,
+                            temp_old: world.temp_init,
+                            mass_total: d_m,
+                            mass_rock: m_rock,
+                            mass_rock_init: m_rock,
+                            mass_ice: m_h2os,
+                            mass_ammonia_solid: m_adhs,
+                            mass_water: 0.0,
+                            mass_ammonia_liquid: 0.0,
+                            energy_total: d_e,
+                            porosity: world.por_init,
+                            pressure: 0.0,
+                            x_hydr: world.hydr_init,
+                            x_hydr_old: world.hydr_init,
+                            kappa: 0.0,
+                            nusselt: 1.0,
+                            crack: 0.0,
+                            crack_size: 0.0,
+                            p_pore: 0.0,
+                            p_hydr: 0.0,
+                            act: [0.0; 3],
+                        }
+                    })
+                    .collect_vec();
 
-                    zones.push(ZoneState {
-                        radius: next_r,
-                        dr: dr_grid,
-                        temp: world.temp_init,
-                        temp_old: world.temp_init,
-                        mass_total: d_m,
-                        mass_rock: m_rock,
-                        mass_rock_init: m_rock,
-                        mass_ice: m_h2os,
-                        mass_ammonia_solid: m_adhs,
-                        mass_water: 0.0,
-                        mass_ammonia_liquid: 0.0,
-                        energy_total: d_e,
-                        porosity: world.por_init,
-                        pressure: 0.0,
-                        x_hydr: world.hydr_init,
-                        x_hydr_old: world.hydr_init,
-                        kappa: 0.0,
-                        nusselt: 1.0,
-                        crack: 0.0,
-                        crack_size: 0.0,
-                        p_pore: 0.0,
-                        p_hydr: 0.0,
-                        act: [0.0; 3],
-                    });
-                    current_r = next_r;
-                }
-
-                let n_orb = if world.orb_a_init > 0.0 {
-                    (GCGS * self.primary_world.mass / world.orb_a_init.powi(3)).sqrt()
-                } else {
-                    0.0
-                };
+                let n_orb = (GCGS * self.primary_world.mass / world.orb_a_init.powi(3))
+                    .sqrt()
+                    .unwrap_or_nan(0.);
 
                 WorldState {
                     name: world.name.clone(),
@@ -418,11 +401,9 @@ impl IcyDwarfInput {
                     }
                 }
 
-                for w in world_states.iter_mut() {
-                    if w.e_orb < MIN_ECC {
-                        w.e_orb = MIN_ECC;
-                    }
-                }
+                world_states
+                    .iter_mut()
+                    .for_each(|w| w.e_orb.max_assign(MIN_ECC));
             }
 
             // Call Thermal logic
@@ -500,7 +481,7 @@ pub fn heat_rock(t: f64) -> f64 {
     }
 }
 
-pub fn heat_ice(t: f64, x: f64, x_salt: f64) -> (f64, f64, f64, f64, f64) {
+pub fn heat_ice(t: f64, x: f64, x_salt: f64) -> [f64; 5] {
     let xb = XC * (2.0 / 95.0_f64).sqrt();
 
     // Determine transition temperatures based on concentration and salt content
@@ -606,5 +587,5 @@ pub fn heat_ice(t: f64, x: f64, x_salt: f64) -> (f64, f64, f64, f64, f64) {
         _ => (0.0, 0.0, 1.0 - x, x),
     };
 
-    (energy, gh2os, gadhs, gh2ol, gnh3l)
+    [energy, gh2os, gadhs, gh2ol, gnh3l]
 }
