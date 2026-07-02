@@ -611,7 +611,7 @@ impl IcyDwarfInput {
                     world_idx
                 );
                 println!("{}", crash_msg);
-                if let Ok(mut file) = OpenOptions::new().write(true).append(true).open(&path) {
+                if let Ok(mut file) = OpenOptions::new().append(true).open(&path) {
                     let _ = writeln!(file, "{}", crash_msg);
                 }
                 world_states[world_idx].a_orb = -1.0e-10;
@@ -700,15 +700,13 @@ impl IcyDwarfInput {
                             let dnorb_dt_inner = dnorb_dt(inner);
                             let dnorb_dt_outer = dnorb_dt(outer);
 
-                            if j * dnorb_dt_inner <= (j + l) * dnorb_dt_outer {
-                                let p_cap =
-                                    self.mmr_capture_probability(world_states, inner, outer, j);
-                                p_capture[inner][outer] = p_cap;
-                                p_capture[outer][inner] = p_cap;
-                            } else {
-                                p_capture[inner][outer] = 0.0;
-                                p_capture[outer][inner] = 0.0;
-                            }
+                            p_capture[inner][outer] =
+                                if j * dnorb_dt_inner <= (j + l) * dnorb_dt_outer {
+                                    self.mmr_capture_probability(world_states, inner, outer, j)
+                                } else {
+                                    0.0
+                                };
+                            p_capture[outer][inner] = p_capture[inner][outer];
                         }
                     }
                 }

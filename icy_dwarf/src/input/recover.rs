@@ -162,6 +162,9 @@ impl IcyDwarfInput {
                     p_pore: c_out.p_pore * MPA,
                     p_hydr: c_out.p_hydr * MPA,
                     act: [0.0; 3],
+                    stress: [0.0; 12],
+                    frac_open: 0.0,
+                    tide_heat_rate: 0.0,
                 });
 
                 current_r = t_out.radius_km;
@@ -199,6 +202,16 @@ impl IcyDwarfInput {
                 cr_epep_old: 0.0,
                 w_tide_tot: orbit_out.w_tide_tot * 1.0e7,
                 w_fluidtide_tot: 0.0,
+                heat_radio: 0.0,
+                heat_grav: 0.0,
+                heat_serp: 0.0,
+                heat_dehydr: 0.0,
+                heat_tide: 0.0,
+                heat_fluidtide: 0.0,
+                cesq: 0.0,
+                til_t: 0.0,
+                m_cracked_rock: 0.0,
+                m_liq: 0.0,
             });
         }
 

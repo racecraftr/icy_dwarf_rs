@@ -1,8 +1,4 @@
-use std::{
-    f64::consts::{FRAC_PI_2, PI},
-    fs,
-    process::exit,
-};
+use std::{f64::consts::FRAC_PI_2, fs, process::exit};
 
 use crate::{
     FloatMat,
@@ -250,7 +246,7 @@ impl IcyDwarfInput {
             let next_pressure = world.zones[ir + 1].pressure;
 
             let next_zone = &world.zones[ir + 1];
-            let (frock, fh2os, fadhs, fh2ol, fnh3l) = next_zone.fracs();
+            let Fracs(frock, fh2os, fadhs, fh2ol, fnh3l) = next_zone.fracs();
 
             let avg_density = frock
                 * (next_zone.x_hydr * self.world_spec.rho_hydr_th()
@@ -278,7 +274,7 @@ impl IcyDwarfInput {
             pore_old[ir] = zone.porosity;
         }
 
-        for (ir, zone) in world.zones.iter_mut().enumerate() {
+        for zone in world.zones.iter_mut() {
             let v_rock = zone.mass_rock
                 / (zone.x_hydr * self.world_spec.rho_hydr_th()
                     + (1.0 - zone.x_hydr) * self.world_spec.rho_rock_th());

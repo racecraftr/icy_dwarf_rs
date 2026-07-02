@@ -372,7 +372,7 @@ impl IcyDwarfInput {
         let mut isteps = 0;
         let n_steps = (self.grid.output_every / self.grid.time_step) as usize;
 
-        for isteps in 0..=n_time {
+        for _ in 0..=n_time {
             real_time += dtime;
             let q_prim = self.primary_world.tidal_q.q_prim(&self.worlds, real_time);
 
@@ -434,11 +434,11 @@ impl IcyDwarfInput {
             // Call Thermal logic
             self.thermal(&mut world_states, dtime);
 
-            // isteps += 1;
+            isteps += 1;
 
             if self.primary_world.mass > 0.0 {
                 let nmoons = self.n_moons();
-                if (isteps + 1) % (n_steps / 10).max(1) == 0 {
+                if isteps % (n_steps / 10).max(1) == 0 {
                     for (im, world) in world_states.iter().enumerate() {
                         let orbit_output = [
                             real_time / GYR2SEC,

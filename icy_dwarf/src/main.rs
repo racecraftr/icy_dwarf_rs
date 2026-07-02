@@ -303,6 +303,21 @@ pub fn create_output(output_path: Option<String>, file_name: String) -> Result<(
     Ok(())
 }
 
+pub fn append_output(output_path: &Option<String>, file_name: &str, data: &[f64]) -> Result<(), String> {
+    use std::io::Write;
+    let output_path = output_path.clone().unwrap_or("Outputs/".to_owned());
+    let file_path = PathBuf::from(&output_path).join(file_name);
+    let mut file = match std::fs::OpenOptions::new().append(true).open(&file_path) {
+        Ok(f) => f,
+        Err(e) => return Err(format!("Unable to open file {}: {}", file_path.to_str().unwrap_or_default(), e)),
+    };
+    let line = data.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+    if let Err(e) = writeln!(file, "{}", line) {
+        return Err(format!("Unable to write to file {}: {}", file_path.to_str().unwrap_or_default(), e));
+    }
+    Ok(())
+}
+
 pub type FloatMat = Mat<Own<f64, usize, usize>>;
 pub type ComplexMat = Mat<Own<Complex64, usize, usize>>;
 

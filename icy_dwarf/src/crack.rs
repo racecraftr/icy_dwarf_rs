@@ -53,13 +53,7 @@ pub struct CrackOutput {
 
 impl IcyDwarfInput {
     /// Calculation of the depth and profile of cracking over time.
-    pub fn crack(
-        &self,
-        zone: &mut ZoneState,
-        dtime: f64,
-        data: &Data,
-        circ: bool,
-    ) -> CrackOutput {
+    pub fn crack(&self, zone: &mut ZoneState, dtime: f64, data: &Data, circ: bool) -> CrackOutput {
         let warnings = self.housekeeping.warnings;
         let thermal_mismatch = self.core_crack.incl_therm_mismatch;
         let pore_water_expansion = self.core_crack.incl_pore;
@@ -172,24 +166,22 @@ impl IcyDwarfInput {
         //             Expansion of pore water as it is heated
         //            (Norton 1984, Le Ravalec and Guéguen 1994)
         //-------------------------------------------------------------------
-        if pore_water_expansion {
-            if zone.x_hydr >= 0.09 && zone.temp > zone.temp_old {
-                // Look up the right value of alpha and beta, given P and T
-                let tempk_int = look_up(zone.temp, TEMPK_MIN, DELTA_TEMPK, SIZEA_TP, warnings);
-                let p_int = look_up(
-                    zone.pressure / BAR,
-                    P_BAR_MIN,
-                    DELTA_P_BAR,
-                    SIZEA_TP,
-                    warnings,
-                );
-                // Calculate fluid overpressure from heating, including geometric effects (Le Ravalec & Guéguen 1994)
-                output.p_pore += (1.0 + 2.0 * ASPECT_RATIO)
-                    * data.alpha[tempk_int][p_int]
-                    * (zone.temp - zone.temp_old)
-                    / (data.beta[tempk_int][p_int] / BAR
-                        + ASPECT_RATIO * 3.0 * (1.0 - 2.0 * nu_poisson) / e_young);
-            }
+        if pore_water_expansion && zone.x_hydr >= 0.09 && zone.temp > zone.temp_old {
+            // Look up the right value of alpha and beta, given P and T
+            let tempk_int = look_up(zone.temp, TEMPK_MIN, DELTA_TEMPK, SIZEA_TP, warnings);
+            let p_int = look_up(
+                zone.pressure / BAR,
+                P_BAR_MIN,
+                DELTA_P_BAR,
+                SIZEA_TP,
+                warnings,
+            );
+            // Calculate fluid overpressure from heating, including geometric effects (Le Ravalec & Guéguen 1994)
+            output.p_pore += (1.0 + 2.0 * ASPECT_RATIO)
+                * data.alpha[tempk_int][p_int]
+                * (zone.temp - zone.temp_old)
+                / (data.beta[tempk_int][p_int] / BAR
+                    + ASPECT_RATIO * 3.0 * (1.0 - 2.0 * nu_poisson) / e_young);
         }
 
         //-------------------------------------------------------------------
@@ -246,10 +238,7 @@ impl IcyDwarfInput {
 
                 for i in 0..3 {
                     if crack_species[i] {
-                        let mut iter = 0;
-                        while iter < itermax {
-                            iter += 1;
-
+                        for iter in 0..itermax {
                             // (Act_prod in mol L-1 to scale with K, silica equation (i=0) assumes unit A/V).
                             // The Arrhenius term is equivalent to a dissociation rate constant kdiss in mol m-2 s-1.
                             let inner_term = (output.act[i] / RHO_H2OL).powf(nu_prod[i]) / k_eq[i];
@@ -285,15 +274,11 @@ impl IcyDwarfInput {
                     output.crack_size += d_crack_size;
                 } else {
                     output.crack_size = 0.0; // Pore clogged
-                    for a in output.act.iter_mut() {
-                        *a = 0.0; // Reset old activity quotients
-                    }
+                    output.act = [0.; 3];
                 }
             } else {
                 // If the crack is closed, clear the old activity quotients
-                for a in output.act.iter_mut() {
-                    *a = 0.0;
-                }
+                output.act = [0.; 3];
             }
         }
 
@@ -310,15 +295,13 @@ impl IcyDwarfInput {
                 output.crack = 2.0; // Heating cracks
             }
         }
-        if hydration_dehydration {
-            if output.p_hydr.abs() > zone.pressure + brittle_strength {
-                if output.p_hydr > 0.0 {
-                    output.crack = 3.0; // Compressive hydration cracks
-                } else {
-                    output.crack = 4.0; // Dehydration cracks
-                }
-                output.p_hydr = 0.0;
-            }
+        if hydration_dehydration && output.p_hydr.abs() > zone.pressure + brittle_strength {
+            output.crack = if output.p_hydr > 0.0 {
+                3. // Compressive hydration cracks
+            } else {
+                4. // Dehydration cracks
+            };
+            output.p_hydr = 0.0;
         }
         if pore_water_expansion {
             if output.p_pore > brittle_strength {
@@ -350,15 +333,14 @@ impl IcyDwarfInput {
         if zone.mass_rock <= zone.mass_rock_init {
             output.crack = 0.0; // Trivial: not enough rock
         }
-        if hydration_dehydration {
-            if output.p_hydr > 0.0 && output.p_hydr <= zone.pressure + brittle_strength {
-                output.crack = -2.0; // Crack closed because of hydration
-            }
+        if hydration_dehydration
+            && output.p_hydr > 0.0
+            && output.p_hydr <= zone.pressure + brittle_strength
+        {
+            output.crack = -2.0; // Crack closed because of hydration
         }
-        if dissolution_precipitation {
-            if output.crack > 0.0 && output.crack_size <= 0.0 {
-                output.crack = -1.0; // Crack closed after precipitation
-            }
+        if dissolution_precipitation && output.crack > 0.0 && output.crack_size <= 0.0 {
+            output.crack = -1.0; // Crack closed after precipitation
         }
 
         // Write the updated state back to zone

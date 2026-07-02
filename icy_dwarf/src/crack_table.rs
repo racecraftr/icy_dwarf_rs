@@ -1,8 +1,10 @@
 use crate::consts::*;
 use extendr_api::prelude::*;
-use std::fs::{self, File};
-use std::io::Write;
 use std::path::PathBuf;
+use std::{
+    fs::{self, File},
+    io::Write,
+};
 
 /// Helper function to write output matrix to a text file in a format readable by the main code.
 fn write_output(data: &[Vec<f64>], base_path: &str, relative_file: &str) -> Result<(), String> {
@@ -63,14 +65,14 @@ pub fn a_tp(path: &str, warnings: bool) -> Result<(), String> {
         }
     }
 
-    let mut delta_t = 0.0;
-    let mut p_pa = 0.0;
     let mut a_tp_data = vec![vec![0.0; SIZEA_TP]; SIZEA_TP];
     let mut k_i = vec![vec![0.0; 2]; INT_SIZE as usize];
 
     for t in 0..SIZEA_TP {
+        let delta_t = DELTA_T_STEP * t as f64;
         for p in 0..SIZEA_TP {
             for j in 0..(INT_SIZE - 1) as usize {
+                let p_pa = P_STEP * (j as f64);
                 let a_var = A_VAR_MAX / INT_SIZE as f64 * (j + 1) as f64;
                 k_i[j][0] = a_var;
 
@@ -83,24 +85,12 @@ pub fn a_tp(path: &str, warnings: bool) -> Result<(), String> {
                     * delta_t
                     - p_pa * (PI_GREEK * a_var).sqrt();
             }
-
-            let mut k_i_max = k_i[0][1];
-            let mut k_i_max_a = k_i[0][0];
-            for j in 0..(INT_SIZE - 1) as usize {
-                if k_i[j][1] > k_i_max {
-                    k_i_max = k_i[j][1];
-                    k_i_max_a = k_i[j][0];
-                }
-            }
-
-            if k_i_max_a < A_MIN {
-                k_i_max_a = A_MIN;
-            }
-            a_tp_data[t][p] = k_i_max_a;
-            p_pa += P_STEP;
+            let (k_i_max, k_i_max_a) =
+                k_i.iter().fold((k_i[0][1], k_i[0][0]), |(k_i, k_i_a), v| {
+                    (k_i.max(v[1]), k_i_a.max(v[0]))
+                });
+            a_tp_data[t][p] = k_i_max_a.max(A_MIN);
         }
-        p_pa = 0.0;
-        delta_t += DELTA_T_STEP;
     }
 
     write_output(&integral, path, "Data/Crack_integral.txt")?;
