@@ -3,6 +3,7 @@ use std::{f64::consts::FRAC_PI_3, sync::LazyLock};
 use itertools::Itertools;
 
 use crate::{
+    append_output,
     consts::*,
     crack, create_output,
     input::{Fracs, IcyDwarfInput, IcyWorld, TidalQ, WorldSpec},
@@ -26,6 +27,7 @@ pub const RHO_NH3L_TH: f64 = XC / (1.0 / RHO_H2OL_TH) + (1.0 / RHO_ADHS_TH - 1.0
 pub struct ZoneState {
     /// Inner radius of shell.
     pub radius: f64,
+
     /// Radial distance from inner radius to outer radius.
     pub dr: f64,
     pub temp: f64,
@@ -49,6 +51,9 @@ pub struct ZoneState {
     pub p_pore: f64,
     pub p_hydr: f64,
     pub act: [f64; 3],
+    pub stress: [f64; 12],
+    pub frac_open: f64,
+    pub tide_heat_rate: f64,
 }
 
 impl ZoneState {
@@ -59,7 +64,7 @@ impl ZoneState {
         //        = pi (r^2 + 2dr + dr^2 - r^2) = pi(2dr + dr^2)
         let total_vol =
             4.0 / 3.0 * PI_GREEK * ((self.radius + self.dr).powi(3) - self.radius.powi(3));
-        let (f_rock, f_ice, f_as, f_water, f_al) = self.fracs();
+        let Fracs(f_rock, f_ice, f_as, f_water, f_al) = self.fracs();
         (
             total_vol,
             Fracs(
@@ -71,8 +76,9 @@ impl ZoneState {
             ),
         )
     }
-    pub fn fracs(&self) -> (f64, f64, f64, f64, f64) {
-        (
+
+    pub fn fracs(&self) -> Fracs {
+        Fracs(
             self.mass_rock / self.mass_total,
             self.mass_ice / self.mass_total,
             self.mass_ammonia_solid / self.mass_total,
@@ -97,7 +103,7 @@ impl ZoneState {
     /// Recalculates `temp` and phase distributions based on the current `energy_total`
     pub fn apply_state(&mut self, x_salt: f64) -> Result<(), String> {
         let specific_energy = self.energy_total / self.mass_total;
-        let (frock, mut fh2os, mut fadhs, mut fh2ol, mut fnh3l) = self.fracs();
+        let Fracs(frock, mut fh2os, mut fadhs, mut fh2ol, mut fnh3l) = self.fracs();
 
         let [mut gh2os, mut gadhs, mut gh2ol, mut gnh3l] =
             [fh2os, fadhs, fh2ol, fnh3l].map(|n| (n / (1.0 - frock)).unwrap_or_nan(0.));
@@ -197,6 +203,16 @@ pub struct WorldState {
     pub cr_epep_old: f64,
     pub w_tide_tot: f64,
     pub w_fluidtide_tot: f64,
+    pub heat_radio: f64,
+    pub heat_grav: f64,
+    pub heat_serp: f64,
+    pub heat_dehydr: f64,
+    pub heat_tide: f64,
+    pub heat_fluidtide: f64,
+    pub cesq: f64,
+    pub til_t: f64,
+    pub m_cracked_rock: f64,
+    pub m_liq: f64,
 }
 
 impl IcyDwarfInput {
@@ -276,6 +292,9 @@ impl IcyDwarfInput {
                             p_pore: 0.0,
                             p_hydr: 0.0,
                             act: [0.0; 3],
+                            stress: [0.0; 12],
+                            frac_open: 0.0,
+                            tide_heat_rate: 0.0,
                         }
                     })
                     .collect_vec();
@@ -311,6 +330,16 @@ impl IcyDwarfInput {
                     cr_epep_old: 0.0,
                     w_tide_tot: 0.0,
                     w_fluidtide_tot: 0.0,
+                    heat_radio: 0.0,
+                    heat_grav: 0.0,
+                    heat_serp: 0.0,
+                    heat_dehydr: 0.0,
+                    heat_tide: 0.0,
+                    heat_fluidtide: 0.0,
+                    cesq: 0.0,
+                    til_t: 0.0,
+                    m_cracked_rock: 0.0,
+                    m_liq: 0.0,
                 }
             })
             .collect();
@@ -338,21 +367,21 @@ impl IcyDwarfInput {
             t_form_min
         } else {
             0.0 // trecover would be here
-        };
-        real_time -= dtime;
+        } - dtime;
 
-        for _ in 0..=n_time {
+        let mut isteps = 0;
+        let n_steps = (self.grid.output_every / self.grid.time_step) as usize;
+
+        for isteps in 0..=n_time {
             real_time += dtime;
             let q_prim = self.primary_world.tidal_q.q_prim(&self.worlds, real_time);
 
             if self.primary_world.mass > 0.0 {
                 let nmoons = self.n_moons();
 
-                for w in world_states.iter_mut() {
-                    if w.e_orb < MIN_ECC {
-                        w.e_orb = MIN_ECC;
-                    }
-                }
+                world_states
+                    .iter_mut()
+                    .for_each(|w| w.e_orb.max_assign(MIN_ECC));
 
                 let mut resonance = vec![vec![0.0; nmoons]; nmoons];
                 let mut p_capture = vec![vec![0.0; nmoons]; nmoons];
@@ -384,17 +413,13 @@ impl IcyDwarfInput {
                     let res_acct_for_old = world_states[im].res_acct_for.clone();
                     self.resscreen(&resonance[im], &mut res_acct_for, &res_acct_for_old);
                     world_states[im].res_acct_for = res_acct_for;
-                }
 
-                for im in 0..nmoons {
                     for i in 0..nmoons {
                         if i != im && world_states[im].res_acct_for[i] == 0.0 {
                             world_states[i].res_acct_for[im] = 0.0;
                         }
                     }
-                }
 
-                for im in 0..nmoons {
                     let tzero_im = self.worlds[im].t_form * MYR2SEC;
                     if real_time >= tzero_im {
                         self.orbit(im, &mut world_states, dtime, real_time, q_prim);
@@ -408,6 +433,155 @@ impl IcyDwarfInput {
 
             // Call Thermal logic
             self.thermal(&mut world_states, dtime);
+
+            // isteps += 1;
+
+            if self.primary_world.mass > 0.0 {
+                let nmoons = self.n_moons();
+                if (isteps + 1) % (n_steps / 10).max(1) == 0 {
+                    for (im, world) in world_states.iter().enumerate() {
+                        let orbit_output = [
+                            real_time / GYR2SEC,
+                            world.a_orb / KM2CM,
+                            world.a_old / KM2CM,
+                            world.e_orb,
+                            world.i_orb * 180.0 / PI_GREEK,
+                            world.obl * 180.0 / PI_GREEK,
+                            world.spin,
+                            world.h_old,
+                            world.k_old,
+                            if world.h_old != 0.0 {
+                                let mut angle = (world.k_old / world.h_old).atan();
+                                if world.h_old < 0.0 {
+                                    if world.k_old >= 0.0 {
+                                        angle += PI_GREEK;
+                                    } else {
+                                        angle -= PI_GREEK;
+                                    }
+                                }
+                                angle * 180.0 / PI_GREEK
+                            } else {
+                                0.0
+                            },
+                            (world.w_tide_tot + world.w_fluidtide_tot) / 1.0e7,
+                            (world.w_tide_tot + world.w_fluidtide_tot)
+                                / (11.5
+                                    * self.worlds[im].planetary_rad.powi(5)
+                                    * ((GCGS * self.primary_world.mass / world.a_orb.powi(3))
+                                        .sqrt())
+                                    .powi(5)
+                                    * world.e_orb.powi(2)
+                                    / GCGS),
+                        ];
+                        let _ = append_output(
+                            output_path,
+                            &format!("{}_{}_Orbit.csv", im, world.name),
+                            &orbit_output,
+                        );
+                    }
+
+                    let mut rebound_output = vec![0.0; nmoons * 7];
+                    for (im, world) in world_states.iter().enumerate() {
+                        rebound_output[im * 7] = world.a_orb / KM2CM;
+                        rebound_output[im * 7 + 1] = world.e_orb;
+                        rebound_output[im * 7 + 2] = world.i_orb;
+                        rebound_output[im * 7 + 3] = world.zones.last().unwrap().radius / KM2CM;
+                        rebound_output[im * 7 + 4] = world.k2;
+                        rebound_output[im * 7 + 5] = world.moi;
+                        rebound_output[im * 7 + 6] = world.q_tide;
+                    }
+                    let _ = append_output(output_path, "icydwarf_outputs_1.txt", &rebound_output);
+                }
+
+                if isteps == n_steps {
+                    let mut mring = self.primary_world.ring.mass;
+                    for w in &self.worlds {
+                        if w.from_ring && real_time >= w.t_form * MYR2SEC {
+                            mring -= w.mass();
+                        }
+                    }
+                    let primary_output = [real_time / GYR2SEC, q_prim, mring * GRAM];
+                    let _ = append_output(output_path, "Primary.txt", &primary_output);
+                }
+            }
+
+            if isteps == n_steps {
+                isteps = 0;
+
+                for (im, world) in world_states.iter().enumerate() {
+                    for zone in &world.zones {
+                        let thermal_output = [
+                            zone.radius / KM2CM,
+                            zone.temp,
+                            zone.mass_rock,
+                            zone.mass_ice,
+                            zone.mass_ammonia_solid,
+                            zone.mass_water,
+                            zone.mass_ammonia_liquid,
+                            zone.nusselt,
+                            0.0,
+                            zone.kappa / 1.0e5,
+                            zone.x_hydr,
+                            zone.porosity,
+                            zone.crack,
+                            zone.tide_heat_rate,
+                        ];
+                        let _ = append_output(
+                            output_path,
+                            &format!("{}_{}_Thermal.csv", im, world.name),
+                            &thermal_output,
+                        );
+                    }
+
+                    let heat_output = [
+                        real_time / GYR2SEC,
+                        world.heat_radio * dtime,
+                        world.heat_grav * dtime,
+                        world.heat_serp * dtime,
+                        world.heat_dehydr * dtime,
+                        world.heat_tide * dtime,
+                        world.heat_fluidtide * dtime,
+                        world.cesq,
+                        world.til_t,
+                        world.w_fluidtide_tot,
+                    ];
+                    let _ = append_output(
+                        output_path,
+                        &format!("{}_{}_Heats.csv", im, world.name),
+                        &heat_output,
+                    );
+
+                    let crack_depth = world
+                        .zones
+                        .iter()
+                        .rev()
+                        .find(|z| z.crack > 0.0)
+                        .map_or(0.0, |z| z.radius / KM2CM);
+                    let w_r = if world.m_cracked_rock < 0.000001 {
+                        0.0
+                    } else {
+                        world.m_liq / world.m_cracked_rock
+                    };
+                    let crack_depth_wr_output = [real_time / GYR2SEC, crack_depth, w_r];
+                    let _ = append_output(
+                        output_path,
+                        &format!("{}_{}_Crack_depth_WR.csv", im, world.name),
+                        &crack_depth_wr_output,
+                    );
+
+                    for zone in &world.zones {
+                        let mut stress_output = zone.stress;
+                        stress_output[0] = zone.radius / KM2CM;
+                        stress_output[10] = zone.frac_open;
+                        stress_output[11] = zone.crack;
+                        let _ = append_output(
+                            output_path,
+                            &format!("{}_{}_Crack_stresses.csv", im, world.name),
+                            &stress_output,
+                        );
+                    }
+                }
+            }
         }
     }
 }
@@ -419,10 +593,6 @@ impl IcyWorld {
 
     pub fn rho_ice(&self) -> f64 {
         1.0 / (self.ammonia / XC) / (RHO_ADHS * GRAM)
-    }
-
-    pub fn phi(&self) -> f64 {
-        todo!()
     }
 
     pub fn frac_rock_mass(&self, world_spec: &WorldSpec) -> f64 {
