@@ -11,17 +11,24 @@ mod tropf;
 mod water_rock;
 
 use std::{
+    env,
+    f64::consts::PI,
     fs::{self, File},
     ops::{Add, Div, Mul, Sub},
+    os,
     path::PathBuf,
     process::exit,
 };
 
 use clap::Parser;
 use faer::mat::{Own, generic::Mat};
+use itertools::Itertools;
 use num::complex::Complex64;
 
-use crate::input::parse_toml;
+use crate::{
+    consts::{CM, GRAM, GYR2SEC, KM2CM, MYR2SEC},
+    input::parse_toml,
+};
 
 #[allow(dead_code)]
 pub mod consts {
@@ -273,11 +280,61 @@ struct Args {
 }
 
 fn main() {
+    println!(
+        r#"
+icy_dwarf.rs v0.1-alpha.
+
+Rust rewrite of Dr. Marc Neveu's (mars.f.neveu@nasa.gov) IcyDwarf program
+originally written in C.
+
+This program is free software; you may redistribute it and modify it
+under the terms of the GNU GPL as published by the free software foundation.
+
+For more information, visit https://ww.gnu.org/licenses.
+        "#
+    );
+    let Ok(current_dir) = env::current_dir() else {
+        eprintln!("Could not determine current directory");
+        exit(1);
+    };
+    println!("Current working in directory: {}", current_dir.display());
+    let Ok(r_home) = env::var("R_HOME") else {
+        eprintln!("R_HOME environment variable not set");
+        exit(1);
+    };
+    let Ok(r_dir) = fs::read_dir(&r_home) else {
+        eprintln!("R_HOME directory does not exist: {}", &r_home);
+        exit(1);
+    };
+    if r_dir.try_len().unwrap_or(0) == 0 {
+        eprintln!("R_HOME directory is empty: {}", &r_home);
+        exit(1);
+    }
+    println!("R_HOME found and populated: {}", &r_home);
     let args = Args::parse();
-    let Some(input) = parse_toml(&args.input_path) else {
+    let Some(mut input) = parse_toml(&args.input_path) else {
         eprintln!("Could not parse/find input file {}", &args.input_path);
         exit(1);
     };
+    input.grid.time_total *= MYR2SEC;
+    input.grid.output_every *= MYR2SEC;
+    input.primary_world.mass /= GRAM;
+    input.primary_world.rad *= KM2CM;
+    input.primary_world.ring.inner *= KM2CM;
+    input.primary_world.ring.outer *= KM2CM;
+    for world in input.worlds.iter_mut() {
+        world.planetary_rad *= KM2CM;
+        world.t_form *= MYR2SEC;
+        world.orb_a_init *= KM2CM;
+        world.orb_i_init *= PI / 180.;
+        world.orb_o_init *= PI / 180.;
+        world.t_reslock *= GYR2SEC;
+    }
+    input.world_spec.rho_rock_dry *= GRAM / CM.powi(3);
+    input.world_spec.rho_rock_hydr *= GRAM / CM.powi(3);
+    input.grid.time_step = (input.grid.time_total / input.grid.output_every).floor() + 1.;
+
+    println!("{:?}", &input);
     if input.subroutines.run_therm {
         println!(">> Running thermal evolution code...");
         input.planet_system(&args.output_folder);
@@ -303,17 +360,35 @@ pub fn create_output(output_path: Option<String>, file_name: String) -> Result<(
     Ok(())
 }
 
-pub fn append_output(output_path: &Option<String>, file_name: &str, data: &[f64]) -> Result<(), String> {
+pub fn append_output(
+    output_path: &Option<String>,
+    file_name: &str,
+    data: &[f64],
+) -> Result<(), String> {
     use std::io::Write;
     let output_path = output_path.clone().unwrap_or("Outputs/".to_owned());
     let file_path = PathBuf::from(&output_path).join(file_name);
     let mut file = match std::fs::OpenOptions::new().append(true).open(&file_path) {
         Ok(f) => f,
-        Err(e) => return Err(format!("Unable to open file {}: {}", file_path.to_str().unwrap_or_default(), e)),
+        Err(e) => {
+            return Err(format!(
+                "Unable to open file {}: {}",
+                file_path.to_str().unwrap_or_default(),
+                e
+            ));
+        }
     };
-    let line = data.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+    let line = data
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     if let Err(e) = writeln!(file, "{}", line) {
-        return Err(format!("Unable to write to file {}: {}", file_path.to_str().unwrap_or_default(), e));
+        return Err(format!(
+            "Unable to write to file {}: {}",
+            file_path.to_str().unwrap_or_default(),
+            e
+        ));
     }
     Ok(())
 }
