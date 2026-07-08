@@ -3,6 +3,7 @@ pub mod float_traits {
     pub trait FloatExt {
         fn unwrap_or_nan(self, fallback: Self) -> Self;
         fn max_assign(&mut self, other: Self);
+        fn instead_of(&self, cond_val: Self, instead: Self) -> Self;
     }
 
     impl FloatExt for f64 {
@@ -12,6 +13,10 @@ pub mod float_traits {
 
         fn max_assign(&mut self, other: Self) {
             *self = self.max(other);
+        }
+
+        fn instead_of(&self, cond_val: Self, instead: Self) -> Self {
+            if *self == cond_val { instead } else { *self }
         }
     }
 }
