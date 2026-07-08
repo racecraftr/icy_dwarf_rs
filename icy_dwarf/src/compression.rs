@@ -9,33 +9,32 @@ use itertools::Itertools;
 use num::traits::Inv;
 
 use crate::{
-    consts::{G, GRAM, KM, KM2CM, M_EARTH, MPA, PI_GREEK, R_EARTH},
-    input::Fracs,
-    planet_system::WorldState,
+    consts::{G, GRAM, KM, KM2CM, M_EARTH, MPA, R_EARTH},
+    input::{Fracs, IcyDwarfInput},
     thermal::ThermalOut,
     traits::float_traits::FloatExt,
 };
 
 const FRAC_3_4PI: f64 = 0.75 / PI;
 
-impl WorldState {
+impl IcyDwarfInput {
     pub fn compression(
         &self,
         data_folder: &str,
-        indices: (usize, usize, usize),
         thermal_outputs: &[Vec<ThermalOut>],
-        time_step: usize,
-        specify: bool,
-        rho_hydr: f64,
-        rho_dry: f64,
     ) -> Option<()> {
         let planmat_db = planmat(data_folder, 50)?;
 
-        let iincore = planmat_index(&planmat_db, indices.0)?;
-        let ioutcore = planmat_index(&planmat_db, indices.1)?;
-        let imantle = planmat_index(&planmat_db, indices.2)?;
+        let (db_incore, db_outcore, db_mantle) = (205, 302, 403);
 
-        let nr = self.zones.len();
+        let iincore = planmat_index(&planmat_db, db_incore)?;
+        let ioutcore = planmat_index(&planmat_db, db_outcore)?;
+        let imantle = planmat_index(&planmat_db, db_mantle)?;
+
+        let nr = self.grid.n_zones;
+        let time_step = self.grid.time_step as usize;
+        let rho_hydr = self.world_spec.rho_rock_hydr;
+        let rho_dry = self.world_spec.rho_rock_dry;
 
         let (mp, (m_incore, m_outcore)) = thermal_outputs
             .iter()
@@ -147,80 +146,51 @@ impl WorldState {
                         * (9.0 * z_val * x4 + 7.0 * (1.0 - 2.0 * z_val) * x2 + 5.0 * (z_val - 1.0));
                     (dy, dydx)
                 };
-                if specify {
-                    let entry = &planmat_db[icomp[ir]];
-                    rhonew[ir] = match entry.eos {
-                        1 => {
-                            let z_val = 0.75 * (entry.ks_p - 4.0);
-                            let mut x_val = 1_f64;
-                            for _ in 0..jmax {
-                                let (dy, dydx) = get_dy_dx(entry, x_val, z_val);
-                                x_val -= dy / dydx;
-                            }
-                            entry.rho_0 * x_val.powi(3)
-                        }
-                        2 => entry.rho_0 + entry.c * p_avg.powf(entry.nn),
-                        3 => {
-                            let out = &thermal_outputs[ir - 1][time_step];
-                            let temp_k = out.temp_kelvin;
-                            let val = entry.v_0
-                                * (1.0 + entry.a[0] * (entry.a[1] * (temp_k - entry.t_ref)).tanh())
-                                * (entry.b[0] + entry.b[1] * (1.0 - (entry.b[2] * p[ir]).tanh()));
-                            val.inv()
-                        }
-                        _ => {
-                            println!("Compression: Error: specify EOS type in database");
-                            return None;
-                        }
-                    }
-                } else {
-                    let rock_idx = planmat_index(&planmat_db, 206)?;
-                    let rock_entry = &planmat_db[rock_idx];
-                    let z_val = 0.75 * (rock_entry.ks_p - 4.0);
-                    let mut x_val = 1_f64;
-                    for _ in 0..jmax {
-                        let (dy, dydx) = get_dy_dx(rock_entry, x_val, z_val);
-                        x_val -= dy / dydx;
-                    }
-                    rho_rock_comp[ir] = rock_entry.rho_0 * x_val.powi(3);
-
-                    let hydr_idx = planmat_index(&planmat_db, 305)?;
-                    let hydr_entry = &planmat_db[hydr_idx];
-                    let z_val = 0.75 * (hydr_entry.ks_p - 4.0);
-                    let mut x_val = 1_f64;
-                    for _ in 0..jmax {
-                        let (dy, dydx) = get_dy_dx(hydr_entry, x_val, z_val);
-                        x_val -= dy / dydx;
-                    }
-                    rho_hydr_comp[ir] = hydr_entry.rho_0 * x_val.powi(3);
-
-                    let out = &thermal_outputs[ir - 1][time_step];
-                    let temp_k = out.temp_kelvin;
-
-                    let val = |mat: usize| {
-                        let idx = planmat_index(&planmat_db, mat)?;
-                        let entry = &planmat_db[idx];
-                        Some(
-                            (entry.v_0
-                                * (1.0
-                                    + entry.a[0] * ((temp_k - entry.t_ref) * entry.a[1]).tanh())
-                                * (entry.b[0] + entry.b[1] * (1.0 - (entry.b[2] * p[ir]).tanh())))
-                            .inv(),
-                        )
-                    };
-                    rho_h2os_comp[ir] = val(403)?;
-                    rho_adhs_comp[ir] = val(412)?;
-                    rho_h2ol_comp[ir] = val(402)?;
-
-                    let sum_mass = out.mass_total();
-                    let val_mix = out.mass_rock
-                        * (out.deg_of_hydr / rho_hydr_comp[ir]
-                            + (1.0 - out.deg_of_hydr) / rho_rock_comp[ir])
-                        + out.mass_ice / rho_h2os_comp[ir]
-                        + out.mass_ammonia_solid / rho_adhs_comp[ir]
-                        + (out.mass_water + out.mass_ammonia_liquid) / rho_h2ol_comp[ir];
-                    rhonew[ir] = (1.0 / val_mix) * sum_mass;
+                let rock_idx = planmat_index(&planmat_db, 206)?;
+                let rock_entry = &planmat_db[rock_idx];
+                let z_val = 0.75 * (rock_entry.ks_p - 4.0);
+                let mut x_val = 1_f64;
+                for _ in 0..jmax {
+                    let (dy, dydx) = get_dy_dx(rock_entry, x_val, z_val);
+                    x_val -= dy / dydx;
                 }
+                rho_rock_comp[ir] = rock_entry.rho_0 * x_val.powi(3);
+
+                let hydr_idx = planmat_index(&planmat_db, 305)?;
+                let hydr_entry = &planmat_db[hydr_idx];
+                let z_val = 0.75 * (hydr_entry.ks_p - 4.0);
+                let mut x_val = 1_f64;
+                for _ in 0..jmax {
+                    let (dy, dydx) = get_dy_dx(hydr_entry, x_val, z_val);
+                    x_val -= dy / dydx;
+                }
+                rho_hydr_comp[ir] = hydr_entry.rho_0 * x_val.powi(3);
+
+                let out = &thermal_outputs[ir - 1][time_step];
+                let temp_k = out.temp_kelvin;
+
+                let val = |mat: usize| {
+                    let idx = planmat_index(&planmat_db, mat)?;
+                    let entry = &planmat_db[idx];
+                    Some(
+                        (entry.v_0
+                            * (1.0 + entry.a[0] * ((temp_k - entry.t_ref) * entry.a[1]).tanh())
+                            * (entry.b[0] + entry.b[1] * (1.0 - (entry.b[2] * p[ir]).tanh())))
+                        .inv(),
+                    )
+                };
+                rho_h2os_comp[ir] = val(403)?;
+                rho_adhs_comp[ir] = val(412)?;
+                rho_h2ol_comp[ir] = val(402)?;
+
+                let sum_mass = out.mass_total();
+                let val_mix = out.mass_rock
+                    * (out.deg_of_hydr / rho_hydr_comp[ir]
+                        + (1.0 - out.deg_of_hydr) / rho_rock_comp[ir])
+                    + out.mass_ice / rho_h2os_comp[ir]
+                    + out.mass_ammonia_solid / rho_adhs_comp[ir]
+                    + (out.mass_water + out.mass_ammonia_liquid) / rho_h2ol_comp[ir];
+                rhonew[ir] = (1.0 / val_mix) * sum_mass;
             }
 
             delta = (rhonew[1] / rho[1] - 1.).abs();
