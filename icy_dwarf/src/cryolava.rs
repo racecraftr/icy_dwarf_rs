@@ -1,7 +1,9 @@
 use crate::consts::{G, KM, KM2CM, RHO_ADHS, RHO_H2OL, RHO_H2OS, RHO_NH3L};
 use crate::input::Fracs;
+use crate::traits::float_traits::FloatExt;
 use crate::{consts::GRAM, input::IcyDwarfInput, thermal::ThermalOut};
 use extendr_api::prelude::*;
+use itertools::Itertools;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
@@ -47,21 +49,14 @@ impl IcyDwarfInput {
         let mut fnh3l = vec![0.0; nr];
         let mut g = vec![0.0; nr];
 
-        let mut r_bound = vec![0.0; nr + 1];
-        r_bound[0] = 0.0;
-        for ir in 0..nr {
-            r_bound[ir + 1] = thermal_out[ir][t].radius_km;
-        }
+        let r_bound = (0..nr).map(|ir| thermal_out[ir][t].radius_km).collect_vec();
 
         for ir in 0..nr {
             let zone = &thermal_out[ir][t];
             let d_m = zone.mass_total();
             Fracs(frock[ir], fh2os[ir], fadhs[ir], fh2ol[ir], fnh3l[ir]) = zone.fracs();
             m[ir] = if ir > 0 { m[ir - 1] + d_m } else { d_m };
-        }
-
-        for ir in 0..nr {
-            g[ir] = G * m[ir] * (KM2CM / KM / r_bound[ir + 1]).powi(2);
+            g[ir] = G * m[ir] * (KM2CM / KM / r_bound[ir]).powi(2);
         }
 
         pressure[nr - 1] = 0.0;
@@ -71,7 +66,7 @@ impl IcyDwarfInput {
         for ir in (0..nr - 1).rev() {
             let zone_curr = &thermal_out[ir][t];
             pressure[ir] = pressure[ir + 1]
-                + 0.5 * (g[ir + 1] + g[ir]) * (r_bound[ir + 2] - r_bound[ir + 1])
+                + 0.5 * (g[ir + 1] + g[ir]) * (r_bound[ir + 1] - r_bound[ir])
                     / crate::consts::KM2CM
                     * crate::consts::KM
                     * (frock[ir + 1]
@@ -125,9 +120,8 @@ impl IcyDwarfInput {
             1.0e-5, 0.01, 0.03, 0.2, 0.1, 0.01, 0.01, 0.005, 2.0e-5, 0.001,
         ];
 
-        let mut abundances = vec![0.0; N_SPECIES as usize];
+        let abundances = wrt_h2o.map(|a| a * m_liq / 0.018);
         for i in 0..N_SPECIES as usize {
-            abundances[i] = wrt_h2o[i] * m_liq / 0.018;
             println!("{} = {:e} mol/kg", species[i], abundances[i] / m_liq);
         }
 
@@ -168,18 +162,15 @@ impl IcyDwarfInput {
             let mut d_int_prec = 0.0;
             let mut p_integral = 0.0;
             for i in r_seafloor_idx..abs_r {
-                let mut m_inf = 0.0;
-                for u in 0..i {
-                    m_inf += thermal_out[u][t].mass_total();
-                }
+                let m_inf: f64 = (0..i).map(|u| thermal_out[u][t].mass_total()).sum();
                 let r_m = thermal_out[i][t].radius_km / 100.0;
                 let d_int = crate::consts::RHO_H2OL * crate::consts::G / (r_m * r_m);
 
                 let dr_m = if i > 0 {
-                    (thermal_out[i][t].radius_km - thermal_out[i - 1][t].radius_km) / 100.0
+                    (thermal_out[i][t].radius_km - thermal_out[i - 1][t].radius_km)
                 } else {
-                    thermal_out[i][t].radius_km / 100.0
-                };
+                    thermal_out[i][t].radius_km
+                } / 100.;
 
                 p_integral += (d_int + d_int_prec) / 2.0 * m_inf * crate::consts::GRAM * dr_m;
                 d_int_prec = d_int;
@@ -192,15 +183,13 @@ impl IcyDwarfInput {
             let p_bar = p_local / crate::consts::BAR;
 
             let mut chnosz_t = temp;
-            if chnosz_t < min_temp_chnosz {
-                if warnings && r == 0 {
-                    println!(
-                        "Cryolava: T={} K below minimum temp for CHNOSZ. Using T={} K instead",
-                        chnosz_t, min_temp_chnosz
-                    );
-                }
-                chnosz_t = min_temp_chnosz;
+            if chnosz_t < min_temp_chnosz && warnings && r == 0 {
+                println!(
+                    "Cryolava: T={} K below minimum temp for CHNOSZ. Using T={} K instead",
+                    chnosz_t, min_temp_chnosz
+                );
             }
+            chnosz_t.max_assign(min_temp_chnosz);
             let temp_c = chnosz_t - crate::consts::KELVIN;
 
             for i in 0..N_SPECIES as usize {
@@ -326,7 +315,7 @@ impl IcyDwarfInput {
                     n_iter += 1;
                     if n_iter >= N_ITER_MAX {
                         if warnings {
-                            println!(
+                            eprintln!(
                                 "Cryolava: could not converge towards a solution of chemical abundances after {} iterations",
                                 N_ITER_MAX
                             );
@@ -363,8 +352,11 @@ impl IcyDwarfInput {
                     * depth_m.powf(1.5)
                     / crate::consts::PI_GREEK.sqrt();
 
-                let is_in_ice = abs_r <= r_diff;
-                let threshold = if is_in_ice { K_IC_ICE } else { K_IC_CRUST };
+                let threshold = if abs_r <= r_diff {
+                    K_IC_ICE
+                } else {
+                    K_IC_CRUST
+                };
 
                 x_vap_table[r][5] = if x_vap_table[r][4] > threshold {
                     1.0

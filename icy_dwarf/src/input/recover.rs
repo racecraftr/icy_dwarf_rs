@@ -61,7 +61,7 @@ impl CrackStressesOut {
 }
 
 impl IcyDwarfInput {
-    pub fn recover(&self, output_folder: String) -> Option<(Vec<WorldState>, f64)> {
+    pub fn recover(&self, output_folder: &str) -> Option<(Vec<WorldState>, f64)> {
         let nr = self.grid.n_zones;
         let mut world_states = Vec::with_capacity(self.n_moons());
         let mut trecover = 0.0;
