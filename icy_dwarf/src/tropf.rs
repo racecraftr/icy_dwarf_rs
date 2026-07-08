@@ -6,7 +6,6 @@ use faer::{
     prelude::Solve,
     sparse::{
         SparseColMat, Triplet,
-        csc_numeric::{Own, generic::SparseColMat},
         linalg::solvers::{Lu, SymbolicLu},
     },
     traits::ComplexField,
@@ -78,14 +77,37 @@ impl IcyDwarfInput {
         }));
 
         let mut lc_values = [Complex64::ZERO; 2 * SH_TERMS - 2];
+        let mut tri_diag_indices = [(0_usize, 0_usize); 2 * SH_TERMS - 2];
         lc_values[0] = Complex64::from({
             let n = n_vec[1] as f64;
             -(n * n - 1.) * (n + s as f64) / (2. * n + 1.)
         });
-        for i in 0..lc_values.len() {
+        for i in (1..lc_values.len()).step_by(2) {
             let k = (i as f64 / 2.).ceil() as usize;
+            let n = n_vec[k - 1] as f64;
+            lc_values[i] = til_om * -n * (n + 1.) * (n + 2.) / (2. * n + 1.) + Complex64::ZERO;
+            tri_diag_indices[i] = (k, k - 1);
+            if i < 2 * SH_TERMS - 3 {
+                let n = n_vec[k + 1] as f64;
+                lc_values[i + 1] =
+                    til_om * -n * (n + 1.) * (n + 1.) / (2. * n + 1.) + Complex64::ZERO;
+                tri_diag_indices[i + 1] = (k, k + 1);
+            }
         }
 
+        let triplets = lc_values
+            .iter()
+            .zip(tri_diag_indices)
+            .map(|(v, (i, j))| Triplet::new(i, j, *v))
+            .collect::<Vec<_>>();
+        let lc = SparseColMat::try_new_from_triplets(2 * SH_TERMS - 2, 2 * SH_TERMS - 2, &triplets)
+            .unwrap();
+
+        let ld = arr_to_diag(&array::from_fn::<_, SH_TERMS, _>(|i| {
+            (tilom + Complex64::I * diss_d[i]) * l_vec[i] - (s as f64) * tilom
+                + 1. / tilom * l_vec[i] / lv_values[i] * l_vec[i]
+        }));
+        let l_vi = arr_to_diag(&[slowness.inv(); SH_TERMS]);
         todo!()
     }
 }
@@ -94,12 +116,11 @@ fn arr_to_diag<T, const N: usize>(arr: &[T; N]) -> SparseColMat<usize, T>
 where
     T: ComplexField + Copy,
 {
-    let triplets: [_; N] = arr
+    let triplets = arr
         .iter()
         .enumerate()
         .map(|(i, &n)| Triplet::new(i, i, n))
-        .collect_array()
-        .unwrap();
+        .collect::<Vec<_>>();
     SparseColMat::try_new_from_triplets(N, N, &triplets).unwrap()
 }
 
@@ -154,8 +175,8 @@ fn eigen(mtx: &[Vec<f64>]) -> Option<Vec<Complex64>> {
 fn globe_time_average(s_coefs: &[C], t_coefs: &[C], s: i32, n_vec: &[i32]) -> Vec<f64> {
     multizip((s_coefs, t_coefs, n_vec))
         .map(|(&sc, &tc, &n)| {
-            let sc_c = sc.conjugate();
-            let tc_c = tc.conjugate();
+            let sc_c = sc.conj();
+            let tc_c = tc.conj();
             (sc * tc_c + sc_c * tc).re / (2. * n as f64 + 1.)
                 * ratio_factorials(n as usize, s as usize)
         })
@@ -164,6 +185,8 @@ fn globe_time_average(s_coefs: &[C], t_coefs: &[C], s: i32, n_vec: &[i32]) -> Ve
 
 #[cfg(test)]
 mod eigen_tests {
+    use num::complex::ComplexFloat;
+
     use super::*;
     #[test]
     fn eigen_test_1() {
