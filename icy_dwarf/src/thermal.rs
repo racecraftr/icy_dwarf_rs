@@ -35,6 +35,28 @@ impl IcyDwarfInput {
         }
     }
 
+    pub fn read_thermal_out(&self, path: &str) -> Option<Vec<Vec<ThermalOut>>> {
+        let output_time_step = self.grid.time_step as usize;
+        let Ok(lines) =
+            fs::read_to_string(path).map(|s| s.lines().map(str::to_owned).collect::<Vec<_>>())
+        else {
+            return None;
+        };
+        Some(
+            lines
+                .chunks(output_time_step)
+                // we don't need to define NT
+                // as a pamaeter, as it is sized dynamically.
+                .map(|chunk| {
+                    chunk
+                        .iter()
+                        .filter_map(|ln| ThermalOut::from_line(ln))
+                        .collect()
+                })
+                .collect(),
+        )
+    }
+
     // TODO: finish this
     pub fn tide(&self, world_state: &mut WorldState) {
         const D_EPS: f64 = 2.22e-16;
@@ -707,27 +729,6 @@ impl ThermalOut {
             self.mass_ammonia_liquid / mass_total,
         )
     }
-}
-
-fn read_thermal_out(path: &str, output_time_step: usize) -> Option<Vec<Vec<ThermalOut>>> {
-    let Ok(lines) =
-        fs::read_to_string(path).map(|s| s.lines().map(str::to_owned).collect::<Vec<_>>())
-    else {
-        return None;
-    };
-    Some(
-        lines
-            .chunks(output_time_step)
-            // we don't need to define NT
-            // as a pamaeter, as it is sized dynamically.
-            .map(|chunk| {
-                chunk
-                    .iter()
-                    .filter_map(|ln| ThermalOut::from_line(ln))
-                    .collect()
-            })
-            .collect(),
-    )
 }
 
 #[cfg(test)]
