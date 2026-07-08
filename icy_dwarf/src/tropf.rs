@@ -1,20 +1,106 @@
+use std::{array, ops::Deref};
+
 use faer::{
     Mat,
     col::generic::Col,
     prelude::Solve,
     sparse::{
-        Triplet,
-        csc_numeric::generic::SparseColMat,
+        SparseColMat, Triplet,
+        csc_numeric::{Own, generic::SparseColMat},
         linalg::solvers::{Lu, SymbolicLu},
     },
+    traits::ComplexField,
 };
-use nalgebra::ComplexField;
-use num::complex::Complex64;
+use itertools::{Itertools, multizip};
+use num::{
+    complex::Complex64,
+    traits::{ConstZero, Inv},
+};
 
-use crate::input::IcyDwarfInput;
+use crate::{input::IcyDwarfInput, traits::float_traits::FloatExt};
+type C = Complex64;
+
+const SH_TERMS: usize = 500;
+const BASE_ARR: [Complex64; SH_TERMS] = [Complex64::ZERO; SH_TERMS];
 
 impl IcyDwarfInput {
-    pub fn tropf(&self) {}
+    pub fn tropf(
+        &self,
+        til_cesq: f64,
+        til_t: f64,
+        tilom: Complex64,
+        s: usize,
+        pn_fsf_amp: f64,
+    ) -> (Complex64, f64, f64) {
+        let diss_type = DissType::KinPE; // note that this is always true.
+        let nf = 2_usize;
+        let til_om = 1_f64;
+
+        let tidal_pot_shc: [_; SH_TERMS] = array::from_fn(|i| {
+            if i == nf - s {
+                Complex64::I * 0.5 / pn_fsf_amp
+            } else {
+                Complex64::ZERO
+            }
+        });
+
+        let vert_struct_shc = BASE_ARR;
+        let sh_deg_arr = BASE_ARR;
+        let divergence_sch = BASE_ARR;
+        let curl_sch = BASE_ARR;
+        let grav_potential = BASE_ARR;
+        let potential_dissipation = til_t.inv();
+        let slowness = Complex64::new(1., potential_dissipation / til_om) / til_cesq;
+
+        let attn_hori = til_t.inv();
+        let attn_vert = attn_hori;
+
+        let n_vec: [_; SH_TERMS] = array::from_fn(|i| s + i);
+
+        let diss_d = n_vec.map(|x| (attn_hori * (x + s) as f64).instead_of(0., f64::MIN_POSITIVE));
+        let diss_r = n_vec.map(|x| (attn_vert * (x + s) as f64).instead_of(0., f64::MIN_POSITIVE));
+
+        let l_alpha_d = arr_to_diag(&diss_d);
+        let l_alpha_r = arr_to_diag(&diss_r);
+        let lv_values = [slowness; SH_TERMS];
+        let lv = arr_to_diag(&lv_values);
+
+        let mut l_vec = n_vec.map(|n| {
+            let n = n as f64;
+            -n * (n + 1.)
+        });
+        if l_vec[0] == 0. {
+            l_vec[0] = f64::MIN_POSITIVE
+        }
+        let ll = arr_to_diag(&l_vec);
+        let la = arr_to_diag(&array::from_fn::<_, SH_TERMS, _>(|i| {
+            (tilom + Complex64::I * diss_d[i]) * l_vec[i] - s as f64 * til_om
+        }));
+
+        let mut lc_values = [Complex64::ZERO; 2 * SH_TERMS - 2];
+        lc_values[0] = Complex64::from({
+            let n = n_vec[1] as f64;
+            -(n * n - 1.) * (n + s as f64) / (2. * n + 1.)
+        });
+        for i in 0..lc_values.len() {
+            let k = (i as f64 / 2.).ceil() as usize;
+        }
+
+        todo!()
+    }
+}
+
+fn arr_to_diag<T, const N: usize>(arr: &[T; N]) -> SparseColMat<usize, T>
+where
+    T: ComplexField + Copy,
+{
+    let triplets: [_; N] = arr
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| Triplet::new(i, i, n))
+        .collect_array()
+        .unwrap();
+    SparseColMat::try_new_from_triplets(N, N, &triplets).unwrap()
 }
 
 #[repr(u8)]
@@ -24,15 +110,13 @@ pub enum DissType {
     KinPE,
 }
 
-type C = Complex64;
-
 fn ratio_factorials(n: usize, s: usize) -> f64 {
     ((n - s + 1)..=(n + s)).product::<usize>() as f64
 }
 
 /// uses the [`saer`] library to perform the Bi-conjugate Gradient Stabilized
 /// method on a matrix to solve the equation Ax = b.
-fn bicgstab(a: &Vec<Vec<Complex64>>, b: &Vec<Complex64>) -> Vec<Complex64> {
+fn bicgstab(a: &[Vec<Complex64>], b: &[Complex64]) -> Vec<Complex64> {
     let rows = a.len();
     let cols = a[0].len();
 
@@ -59,7 +143,7 @@ fn bicgstab(a: &Vec<Vec<Complex64>>, b: &Vec<Complex64>) -> Vec<Complex64> {
 }
 
 /// Finds the complex eigenvalues of a real matrix.
-fn eigen(mtx: &Vec<Vec<f64>>) -> Option<Vec<Complex64>> {
+fn eigen(mtx: &[Vec<f64>]) -> Option<Vec<Complex64>> {
     let rows = mtx.len();
     let cols = mtx[0].len();
 
@@ -68,15 +152,11 @@ fn eigen(mtx: &Vec<Vec<f64>>) -> Option<Vec<Complex64>> {
 }
 
 fn globe_time_average(s_coefs: &[C], t_coefs: &[C], s: i32, n_vec: &[i32]) -> Vec<f64> {
-    (0..s_coefs.len())
-        .map(|i| {
-            let sc = s_coefs[i];
-            let tc = t_coefs[i];
-            let sc_c = sc.conj();
-            let tc_c = tc.conj();
-            let n = n_vec[i];
-
-            (sc * tc_c + sc_c * tc).real() / (2. * n as f64 + 1.)
+    multizip((s_coefs, t_coefs, n_vec))
+        .map(|(&sc, &tc, &n)| {
+            let sc_c = sc.conjugate();
+            let tc_c = tc.conjugate();
+            (sc * tc_c + sc_c * tc).re / (2. * n as f64 + 1.)
                 * ratio_factorials(n as usize, s as usize)
         })
         .collect()
