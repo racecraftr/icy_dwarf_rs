@@ -1,3 +1,20 @@
+//!
+//! orbit.rs
+//!
+//! Author: Avi Gupta (avigupta.mail@gmail.com)
+//!
+//! Handles orbital evolution routines.
+//!
+//!Copyright (C) 2026 Avi Gupta (avigupta.mail@gmail.com)
+//!  This program is free software: you can redistribute it and/or modify it
+//! under the terms of the GNU General Public License as published by the Free
+//! Software Foundation, either version 3 of the License, or (at your option) any
+//! later version. This program is distributed in the hope that it will be
+//! useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+//!  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+//! Public License for more details. You should have received a copy of the GNU
+//! General Public License along with this program. If not, see
+//! <http://www.gnu.org/licenses/>.
 use crate::{
     consts::{GCGS, GYR2SEC, IJMAX, MIN_ECC, MYR2SEC},
     input::IcyDwarfInput,
@@ -7,6 +24,9 @@ use crate::{
 const ORB_D_TIME: f64 = 5.0e-4 * 1.0e-6 * MYR2SEC;
 
 impl IcyDwarfInput {
+    //! The original code used a large number of parameters
+    //! that have since been managed by [`IcyDwarfInput`].
+    /// Main function that handles orbital evolution routines.
     pub fn orbit(
         &self,
         world_idx: usize,
