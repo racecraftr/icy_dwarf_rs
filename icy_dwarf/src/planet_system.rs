@@ -1,4 +1,4 @@
-use std::{f64::consts::FRAC_PI_3, sync::LazyLock};
+use std::f64::consts::{FRAC_PI_3, PI};
 
 use itertools::Itertools;
 
@@ -216,7 +216,7 @@ pub struct WorldState {
 }
 
 impl IcyDwarfInput {
-    pub fn planet_system(&self, output_path: &Option<String>) {
+    pub fn planet_system(&self, output_path: &String) {
         let dtime = self.grid.time_step * 1.0e-6 * MYR2SEC;
         let n_time = (self.grid.time_total / self.grid.time_step) as usize;
         let _n_steps = (self.grid.output_every / self.grid.time_step) as usize;
@@ -236,12 +236,10 @@ impl IcyDwarfInput {
             .map(|(idx, world)| {
                 let name = &world.name;
                 for s in ["Thermal", "Heats", "Crack_depth_WR", "Crack_stresses"] {
-                    let _ =
-                        create_output(output_path.clone(), format!("{}_{}_{}.csv", idx, name, s));
+                    let _ = create_output(output_path, format!("{}_{}_{}.txt", idx, name, s));
                 }
                 if self.primary_world.mass > 0.0 {
-                    let _ =
-                        create_output(output_path.clone(), format!("{}_{}_Orbit.csv", idx, name));
+                    let _ = create_output(output_path, format!("{}_{}_Orbit.txt", idx, name));
                 }
 
                 let rho_ice = 1.0
@@ -352,13 +350,16 @@ impl IcyDwarfInput {
                 "PCapture",
                 "icydwarf_outputs_1",
             ] {
-                let _ = create_output(output_path.clone(), format!("{}.txt", s));
+                let _ = create_output(output_path, format!("{}.txt", s));
             }
         }
 
         if self.housekeeping.recover {
-            // TODO: Implement recovery code
-            return;
+            let Some((rec_states, _)) = self.recover(output_path) else {
+                eprintln!("Could not recover input");
+                return;
+            };
+            world_states = rec_states
         }
         //-------------------------------------------------------------------
         //                       Initialize time loop
@@ -453,11 +454,7 @@ impl IcyDwarfInput {
                             if world.h_old != 0.0 {
                                 let mut angle = (world.k_old / world.h_old).atan();
                                 if world.h_old < 0.0 {
-                                    if world.k_old >= 0.0 {
-                                        angle += PI_GREEK;
-                                    } else {
-                                        angle -= PI_GREEK;
-                                    }
+                                    angle += PI * world.k_old.signum();
                                 }
                                 angle * 180.0 / PI_GREEK
                             } else {
