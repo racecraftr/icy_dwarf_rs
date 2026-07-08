@@ -15,7 +15,6 @@ use std::{
     f64::consts::PI,
     fs::{self, File},
     ops::{Add, Div, Mul, Sub},
-    os,
     path::PathBuf,
     process::exit,
 };
@@ -270,8 +269,8 @@ struct Args {
 
     /// The path to the Output folder, in which the subroutines will write files.
     /// By default, this will be set to the Output folder in the current working directory.
-    #[arg(short, long, value_name = "OUTPUT FOLDER")]
-    pub output_folder: Option<String>,
+    #[arg(short, long, value_name = "OUTPUT FOLDER", default_value = "Outputs/")]
+    pub output_folder: String,
 
     /// The path to the Data folder, in which inputs to subroutines will be read.
     /// By default, this will bes set to the Data folder in the current working directory.
@@ -339,11 +338,27 @@ For more information, visit https://ww.gnu.org/licenses.
         println!(">> Running thermal evolution code...");
         input.planet_system(&args.output_folder);
     }
+    if input.subroutines.run_comp {
+        println!(">> Running compression routine...");
+        let Some(thermal_outputs) = input.read_thermal_out(&args.output_folder) else {
+            eprintln!("Could not read thermal output at {}", &args.output_folder);
+            exit(1);
+        };
+        if input
+            .compression(
+                &args.data_path.unwrap_or("Data/".to_owned()),
+                &thermal_outputs,
+            )
+            .is_none()
+        {
+            eprintln!("Could not calculate compression code");
+            exit(1);
+        };
+    }
 }
 
-pub fn create_output(output_path: Option<String>, file_name: String) -> Result<(), String> {
-    let output_path = output_path.unwrap_or("Outputs/".to_owned());
-    if let Err(e) = fs::create_dir_all(&output_path) {
+pub fn create_output(output_path: &String, file_name: String) -> Result<(), String> {
+    if let Err(e) = fs::create_dir_all(output_path) {
         return Err(format!(
             "Unable to create output folder at {}: {}",
             output_path, e
@@ -360,13 +375,8 @@ pub fn create_output(output_path: Option<String>, file_name: String) -> Result<(
     Ok(())
 }
 
-pub fn append_output(
-    output_path: &Option<String>,
-    file_name: &str,
-    data: &[f64],
-) -> Result<(), String> {
+pub fn append_output(output_path: &String, file_name: &str, data: &[f64]) -> Result<(), String> {
     use std::io::Write;
-    let output_path = output_path.clone().unwrap_or("Outputs/".to_owned());
     let file_path = PathBuf::from(&output_path).join(file_name);
     let mut file = match std::fs::OpenOptions::new().append(true).open(&file_path) {
         Ok(f) => f,
