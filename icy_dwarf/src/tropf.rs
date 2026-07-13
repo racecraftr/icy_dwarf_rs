@@ -1,8 +1,8 @@
-use std::{array, ops::Deref};
+use std::array;
 
 use faer::{
-    Mat,
-    col::generic::Col,
+    Col, Mat, Scale,
+    linalg::zip::IntoView,
     prelude::Solve,
     sparse::{
         SparseColMat, Triplet,
@@ -10,19 +10,25 @@ use faer::{
     },
     traits::ComplexField,
 };
-use itertools::{Itertools, multizip};
-use num::{
-    complex::Complex64,
-    traits::{ConstZero, Inv},
-};
+use itertools::multizip;
+use num::{complex::Complex64, traits::Inv};
 
-use crate::{input::IcyDwarfInput, traits::float_traits::FloatExt};
+use crate::{
+    input::IcyDwarfInput,
+    traits::{float_traits::FloatExt, num_ext::NumExt},
+};
 type C = Complex64;
+
+const C0: Complex64 = Complex64::ZERO;
+const I: Complex64 = Complex64::I;
 
 const SH_TERMS: usize = 500;
 const BASE_ARR: [Complex64; SH_TERMS] = [Complex64::ZERO; SH_TERMS];
 
 impl IcyDwarfInput {
+    /// Port of the Tropf function from MatLab to Rust.
+    /// Why? Well, MatLab ain't free...
+    /// Combines the TROPF and tropf functions from the original C code.
     pub fn tropf(
         &self,
         til_cesq: f64,
@@ -43,10 +49,10 @@ impl IcyDwarfInput {
             }
         });
 
-        let vert_struct_shc = BASE_ARR;
+        let source_sink_shc = BASE_ARR;
         let sh_deg_arr = BASE_ARR;
-        let divergence_sch = BASE_ARR;
-        let curl_sch = BASE_ARR;
+        let divergence_shc = BASE_ARR;
+        let curl_shc = BASE_ARR;
         let grav_potential = BASE_ARR;
         let potential_dissipation = til_t.inv();
         let slowness = Complex64::new(1., potential_dissipation / til_om) / til_cesq;
@@ -56,8 +62,10 @@ impl IcyDwarfInput {
 
         let n_vec: [_; SH_TERMS] = array::from_fn(|i| s + i);
 
-        let diss_d = n_vec.map(|x| (attn_hori * (x + s) as f64).instead_of(0., f64::MIN_POSITIVE));
-        let diss_r = n_vec.map(|x| (attn_vert * (x + s) as f64).instead_of(0., f64::MIN_POSITIVE));
+        let diss_d =
+            n_vec.map(|x| (attn_hori * (x + s) as f64 + C0).instead_of(C0, f64::MIN_POSITIVE + C0));
+        let diss_r =
+            n_vec.map(|x| (attn_vert * (x + s) as f64 + C0).instead_of(C0, f64::MIN_POSITIVE + C0));
 
         let l_alpha_d = arr_to_diag(&diss_d);
         let l_alpha_r = arr_to_diag(&diss_r);
@@ -71,7 +79,7 @@ impl IcyDwarfInput {
         if l_vec[0] == 0. {
             l_vec[0] = f64::MIN_POSITIVE
         }
-        let ll = arr_to_diag(&l_vec);
+        let ll = arr_to_diag(&l_vec.map(|n| n + C0));
         let la = arr_to_diag(&array::from_fn::<_, SH_TERMS, _>(|i| {
             (tilom + Complex64::I * diss_d[i]) * l_vec[i] - s as f64 * til_om
         }));
@@ -85,12 +93,11 @@ impl IcyDwarfInput {
         for i in (1..lc_values.len()).step_by(2) {
             let k = (i as f64 / 2.).ceil() as usize;
             let n = n_vec[k - 1] as f64;
-            lc_values[i] = til_om * -n * (n + 1.) * (n + 2.) / (2. * n + 1.) + Complex64::ZERO;
+            lc_values[i] = til_om * -n * (n + 1.) * (n + 2.) / (2. * n + 1.) + C0;
             tri_diag_indices[i] = (k, k - 1);
             if i < 2 * SH_TERMS - 3 {
                 let n = n_vec[k + 1] as f64;
-                lc_values[i + 1] =
-                    til_om * -n * (n + 1.) * (n + 1.) / (2. * n + 1.) + Complex64::ZERO;
+                lc_values[i + 1] = til_om * -n * (n + 1.) * (n + 1.) / (2. * n + 1.) + C0;
                 tri_diag_indices[i + 1] = (k, k + 1);
             }
         }
@@ -108,8 +115,81 @@ impl IcyDwarfInput {
                 + 1. / tilom * l_vec[i] / lv_values[i] * l_vec[i]
         }));
         let l_vi = arr_to_diag(&[slowness.inv(); SH_TERMS]);
+        let l_li = arr_to_diag(&l_vec.map(|l| l.inv() + C0));
+        let l_bi = arr_to_diag(&array::from_fn::<_, SH_TERMS, _>(|i| {
+            (tilom + diss_d[i] * I).inv() * l_vec[i] - s as f64 * til_om
+        }));
+        let eye = arr_to_diag(&[1. + C0; SH_TERMS]);
+
+        let rho_ratio = 0.5;
+        let iln_vals = arr_to_diag(&n_vec.map(|n| {
+            let n = n as f64;
+            -3. / (2. * n + 1.) * rho_ratio + C0
+        }));
+
+        // solvemethod is always 1, so we solve for pns.
+        // Faer lets us do matrix multiplication really easily.
+
+        let l_tilp =
+            &l_li * (&la - &lc * &l_bi * &lc) * Scale::from_ref(&tilom) * &l_li * &lv + &eye;
+
+        let tidal_pot_shc_col = arr_to_col(&tidal_pot_shc);
+        let source_sink_shc_col = arr_to_col(&source_sink_shc);
+        let divergence_shc_col = arr_to_col(&divergence_shc);
+        let curl_shc_col = arr_to_col(&curl_shc);
+
+        let q_tilp = (-&l_li) * (&la - &lc * &l_bi * &lc) * &l_li * &source_sink_shc_col
+            + &l_li * &divergence_shc_col
+            + &l_li * &lc * &l_bi * &curl_shc_col;
+
+        let lhs_p = &q_tilp + &tidal_pot_shc_col;
+
+        let pns = solve(&(&l_tilp + &iln_vals), &lhs_p);
+        let dns = &l_li * &(Scale::from_ref(&tilom) * &lv * &pns + &source_sink_shc_col);
+
+        let rns = &(-&l_bi) * (&lc * &dns + &curl_shc_col);
+
+        let globe_time_average = |s_c: &Col<Complex64>, t_c: &Col<Complex64>| -> Col<Complex64> {
+            Col::from_iter(
+                globe_time_average(
+                    s_c.into_view().as_slice(),
+                    t_c.into_view().as_slice(),
+                    s,
+                    &n_vec,
+                )
+                .iter()
+                .map(|n| Complex64::from(n)),
+            )
+        };
+
+        let cal_wns = {
+            let cal_wns_1 = Scale::from_ref(&(-I)) * &tidal_pot_shc_col;
+            let cal_wns_2 = &pns * Scale::from_ref(&(-I * tilom));
+            let cal_wns_3 = &lv * &cal_wns_2;
+
+            let cal_wns_temp = globe_time_average(&cal_wns_1, &cal_wns_3);
+
+            let cal_wns_1 = Scale::from_ref(&I) * (&tidal_pot_shc_col - &pns);
+
+            cal_wns_temp + cal_wns_1
+        };
+
+        let cal_dns = Scale::from_ref(&-0.5.as_cplx())
+            * (globe_time_average(&dns, &(&ll * &l_alpha_d * &dns))
+                + globe_time_average(&(&l_alpha_d * &dns), &(&ll * &dns))
+                + {
+                    let rns = Scale::from_ref(&-I) * &rns;
+                    globe_time_average(&rns, &(&ll * &l_alpha_r * &rns))
+                });
         todo!()
     }
+}
+
+fn arr_to_col<T, const N: usize>(arr: &[T; N]) -> Col<T>
+where
+    T: ComplexField + Copy,
+{
+    Col::from_fn(N, |i| arr[i])
 }
 
 fn arr_to_diag<T, const N: usize>(arr: &[T; N]) -> SparseColMat<usize, T>
@@ -133,6 +213,12 @@ pub enum DissType {
 
 fn ratio_factorials(n: usize, s: usize) -> f64 {
     ((n - s + 1)..=(n + s)).product::<usize>() as f64
+}
+
+fn solve(mat: &SparseColMat<usize, Complex64>, b: &Col<Complex64>) -> Col<Complex64> {
+    let symb = SymbolicLu::try_new(mat.symbolic()).unwrap();
+    let lu = Lu::try_new_with_symbolic(symb, mat.as_ref()).unwrap();
+    lu.solve(&b)
 }
 
 /// uses the [`saer`] library to perform the Bi-conjugate Gradient Stabilized
@@ -172,7 +258,7 @@ fn eigen(mtx: &[Vec<f64>]) -> Option<Vec<Complex64>> {
     mat.eigenvalues().ok() // that's it, really
 }
 
-fn globe_time_average(s_coefs: &[C], t_coefs: &[C], s: i32, n_vec: &[i32]) -> Vec<f64> {
+fn globe_time_average(s_coefs: &[C], t_coefs: &[C], s: usize, n_vec: &[usize]) -> Vec<f64> {
     multizip((s_coefs, t_coefs, n_vec))
         .map(|(&sc, &tc, &n)| {
             let sc_c = sc.conj();
