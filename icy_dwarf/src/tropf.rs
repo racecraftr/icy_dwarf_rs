@@ -11,7 +11,10 @@ use faer::{
     traits::ComplexField,
 };
 use itertools::multizip;
-use num::{complex::Complex64, traits::Inv};
+use num::{
+    complex::{Complex64, ComplexFloat},
+    traits::Inv,
+};
 
 use crate::{
     input::IcyDwarfInput,
@@ -180,7 +183,16 @@ impl IcyDwarfInput {
                 + {
                     let rns = Scale::from_ref(&-I) * &rns;
                     globe_time_average(&rns, &(&ll * &l_alpha_r * &rns))
-                });
+                        + globe_time_average(&(&l_alpha_r * &rns), &(&ll * &rns))
+                })
+            + {
+                let pns = Scale::from_ref(&-I) * &pns;
+                let lv_imag = arr_to_diag(&lv_values.map(|n| n.im.as_cplx()));
+                globe_time_average(
+                    &(Scale::from_ref(&til_om.as_cplx()) * &pns),
+                    &(&lv_imag * &pns),
+                )
+            };
         todo!()
     }
 }
