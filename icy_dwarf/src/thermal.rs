@@ -1,4 +1,4 @@
-use std::{f64::consts::FRAC_PI_2, fs, process::exit};
+use std::{f64::consts::FRAC_PI_2, fs, process::exit, sync::LazyLock};
 
 use crate::{
     FloatMat,

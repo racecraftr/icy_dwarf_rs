@@ -17,6 +17,7 @@ use std::{
     ops::{Add, Div, Mul, Sub},
     path::PathBuf,
     process::exit,
+    sync::LazyLock,
 };
 
 use clap::Parser;
@@ -27,9 +28,184 @@ use num::complex::Complex64;
 use crate::{
     consts::{CM, GRAM, GYR2SEC, KM2CM, MYR2SEC},
     input::parse_toml,
+    thermal::ThermalOut,
 };
 
 #[allow(dead_code)]
+#[derive(Parser)]
+struct Args {
+    /// The path to the IcyDwarf input.
+    pub input_path: String,
+
+    /// The path to the Output folder, in which the subroutines will write files.
+    /// By default, this will be set to the Output folder in the current working directory.
+    #[arg(short, long, value_name = "OUTPUT FOLDER", default_value = "Outputs/")]
+    pub output_folder: String,
+
+    /// The path to the Data folder, in which inputs to subroutines will be read.
+    /// By default, this will bes set to the Data folder in the current working directory.
+    #[arg(short, long, value_name = "DATA FOLDER")]
+    pub data_path: Option<String>,
+}
+
+fn main() {
+    println!(
+        r#"
+icy_dwarf.rs v0.1-alpha.
+
+Rust rewrite of Dr. Marc Neveu's (mars.f.neveu@nasa.gov) IcyDwarf program
+originally written in C.
+
+This program is free software; you may redistribute it and modify it
+under the terms of the GNU GPL as published by the free software foundation.
+
+For more information, visit https://ww.gnu.org/licenses.
+        "#
+    );
+    let Ok(current_dir) = env::current_dir() else {
+        eprintln!("Could not determine current directory");
+        exit(1);
+    };
+    println!("Current working in directory: {}", current_dir.display());
+    let Ok(r_home) = env::var("R_HOME") else {
+        eprintln!("R_HOME environment variable not set");
+        exit(1);
+    };
+    let Ok(r_dir) = fs::read_dir(&r_home) else {
+        eprintln!("R_HOME directory does not exist: {}", &r_home);
+        exit(1);
+    };
+    if r_dir.try_len().unwrap_or(0) == 0 {
+        eprintln!("R_HOME directory is empty: {}", &r_home);
+        exit(1);
+    }
+    println!("R_HOME found and populated: {}", &r_home);
+    let args = Args::parse();
+    let Some(mut input) = parse_toml(&args.input_path) else {
+        eprintln!("Could not parse/find input file {}", &args.input_path);
+        exit(1);
+    };
+    input.grid.time_total *= MYR2SEC;
+    input.grid.output_every *= MYR2SEC;
+    input.primary_world.mass /= GRAM;
+    input.primary_world.rad *= KM2CM;
+    input.primary_world.ring.inner *= KM2CM;
+    input.primary_world.ring.outer *= KM2CM;
+    for world in input.worlds.iter_mut() {
+        world.planetary_rad *= KM2CM;
+        world.t_form *= MYR2SEC;
+        world.orb_a_init *= KM2CM;
+        world.orb_i_init *= PI / 180.;
+        world.orb_o_init *= PI / 180.;
+        world.t_reslock *= GYR2SEC;
+    }
+    input.world_spec.rho_rock_dry *= GRAM / CM.powi(3);
+    input.world_spec.rho_rock_hydr *= GRAM / CM.powi(3);
+    input.grid.time_step = (input.grid.time_total / input.grid.output_every).floor() + 1.;
+
+    println!("{:?}", &input);
+    if input.subroutines.run_therm {
+        println!(">> Running thermal evolution code...");
+        input.planet_system(&args.output_folder);
+    }
+    if input.subroutines.run_comp {
+        println!(">> Running compression routine...");
+        let Some(thermal_outputs) = input.read_thermal_out(&args.output_folder) else {
+            eprintln!("Could not read thermal output at {}", &args.output_folder);
+            exit(1);
+        };
+        if input
+            .compression(
+                &args.data_path.unwrap_or("Data/".to_owned()),
+                &thermal_outputs,
+            )
+            .is_none()
+        {
+            eprintln!("Could not calculate compression code");
+            exit(1);
+        };
+    }
+    if input.subroutines.run_cryo {
+        println!(">> Running cryovolcanism code...");
+        let Some(thermal_outputs) = input.read_thermal_out(&args.output_folder) else {
+            eprintln!("Could not read thermal output at {}", &args.output_folder);
+            exit(1);
+        };
+        if let Err(s) = input.cryolava(&thermal_outputs, "") {
+            eprintln!("ERROR: {}", s);
+            exit(1);
+        }
+    }
+}
+
+pub fn create_output(output_path: &String, file_name: String) -> Result<(), String> {
+    if let Err(e) = fs::create_dir_all(output_path) {
+        return Err(format!(
+            "Unable to create output folder at {}: {}",
+            output_path, e
+        ));
+    }
+    let file_path = PathBuf::from(&output_path).join(file_name);
+    if let Err(e) = File::create(&file_path) {
+        return Err(format!(
+            "Unable to create file {}: {}",
+            file_path.to_str().unwrap_or_default(),
+            e
+        ));
+    }
+    Ok(())
+}
+
+pub fn append_output(output_path: &String, file_name: &str, data: &[f64]) -> Result<(), String> {
+    use std::io::Write;
+    let file_path = PathBuf::from(&output_path).join(file_name);
+    let mut file = match std::fs::OpenOptions::new().append(true).open(&file_path) {
+        Ok(f) => f,
+        Err(e) => {
+            return Err(format!(
+                "Unable to open file {}: {}",
+                file_path.to_str().unwrap_or_default(),
+                e
+            ));
+        }
+    };
+    let line = data
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    if let Err(e) = writeln!(file, "{}", line) {
+        return Err(format!(
+            "Unable to write to file {}: {}",
+            file_path.to_str().unwrap_or_default(),
+            e
+        ));
+    }
+    Ok(())
+}
+
+pub type FloatMat = Mat<Own<f64, usize, usize>>;
+pub type ComplexMat = Mat<Own<Complex64, usize, usize>>;
+
+pub fn to_faer_mat<T>(mat: &[Vec<T>]) -> Option<Mat<Own<T>>>
+where
+    T: Add + Sub + Mul + Div + PartialOrd + Clone,
+{
+    let rows = mat.len();
+    let cols = mat[0].len();
+    if !mat.iter().all(|v| v.len() == cols) {
+        return None;
+    }
+    let m = Mat::from_fn(rows, cols, |i, j| mat[i][j].clone());
+    Some(m)
+}
+
+pub fn mat_as_complex(mat: &FloatMat) -> ComplexMat {
+    let (rows, cols) = mat.shape();
+    Mat::from_fn(rows, cols, |i, j| Complex64::from(mat[(i, j)]))
+}
+
+/// Constants that are used throughout the IcyDwarf code.
 pub mod consts {
     // -----------------------------------------------------------------
     // PHYSICAL AND MATHEMATICAL CONSTANTS
@@ -168,6 +344,7 @@ pub mod consts {
 
     // -----------------------------------------------------------------
     // CRACKING PARAMETERS
+    // ^ ...ayo?
     // -----------------------------------------------------------------
 
     pub const E_YOUNG_OLIV: f64 = 200.0e9; // Young's modulus, olivine (Pa) (Christensen 1966)
@@ -260,166 +437,4 @@ pub mod consts {
     pub const IJMAX: i32 = 5;
     /// Minimum eccentricity
     pub const MIN_ECC: f64 = 1.0e-4;
-}
-
-#[derive(Parser)]
-struct Args {
-    /// The path to the IcyDwarf input.
-    pub input_path: String,
-
-    /// The path to the Output folder, in which the subroutines will write files.
-    /// By default, this will be set to the Output folder in the current working directory.
-    #[arg(short, long, value_name = "OUTPUT FOLDER", default_value = "Outputs/")]
-    pub output_folder: String,
-
-    /// The path to the Data folder, in which inputs to subroutines will be read.
-    /// By default, this will bes set to the Data folder in the current working directory.
-    #[arg(short, long, value_name = "DATA FOLDER")]
-    pub data_path: Option<String>,
-}
-
-fn main() {
-    println!(
-        r#"
-icy_dwarf.rs v0.1-alpha.
-
-Rust rewrite of Dr. Marc Neveu's (mars.f.neveu@nasa.gov) IcyDwarf program
-originally written in C.
-
-This program is free software; you may redistribute it and modify it
-under the terms of the GNU GPL as published by the free software foundation.
-
-For more information, visit https://ww.gnu.org/licenses.
-        "#
-    );
-    let Ok(current_dir) = env::current_dir() else {
-        eprintln!("Could not determine current directory");
-        exit(1);
-    };
-    println!("Current working in directory: {}", current_dir.display());
-    let Ok(r_home) = env::var("R_HOME") else {
-        eprintln!("R_HOME environment variable not set");
-        exit(1);
-    };
-    let Ok(r_dir) = fs::read_dir(&r_home) else {
-        eprintln!("R_HOME directory does not exist: {}", &r_home);
-        exit(1);
-    };
-    if r_dir.try_len().unwrap_or(0) == 0 {
-        eprintln!("R_HOME directory is empty: {}", &r_home);
-        exit(1);
-    }
-    println!("R_HOME found and populated: {}", &r_home);
-    let args = Args::parse();
-    let Some(mut input) = parse_toml(&args.input_path) else {
-        eprintln!("Could not parse/find input file {}", &args.input_path);
-        exit(1);
-    };
-    input.grid.time_total *= MYR2SEC;
-    input.grid.output_every *= MYR2SEC;
-    input.primary_world.mass /= GRAM;
-    input.primary_world.rad *= KM2CM;
-    input.primary_world.ring.inner *= KM2CM;
-    input.primary_world.ring.outer *= KM2CM;
-    for world in input.worlds.iter_mut() {
-        world.planetary_rad *= KM2CM;
-        world.t_form *= MYR2SEC;
-        world.orb_a_init *= KM2CM;
-        world.orb_i_init *= PI / 180.;
-        world.orb_o_init *= PI / 180.;
-        world.t_reslock *= GYR2SEC;
-    }
-    input.world_spec.rho_rock_dry *= GRAM / CM.powi(3);
-    input.world_spec.rho_rock_hydr *= GRAM / CM.powi(3);
-    input.grid.time_step = (input.grid.time_total / input.grid.output_every).floor() + 1.;
-
-    println!("{:?}", &input);
-    if input.subroutines.run_therm {
-        println!(">> Running thermal evolution code...");
-        input.planet_system(&args.output_folder);
-    }
-    if input.subroutines.run_comp {
-        println!(">> Running compression routine...");
-        let Some(thermal_outputs) = input.read_thermal_out(&args.output_folder) else {
-            eprintln!("Could not read thermal output at {}", &args.output_folder);
-            exit(1);
-        };
-        if input
-            .compression(
-                &args.data_path.unwrap_or("Data/".to_owned()),
-                &thermal_outputs,
-            )
-            .is_none()
-        {
-            eprintln!("Could not calculate compression code");
-            exit(1);
-        };
-    }
-}
-
-pub fn create_output(output_path: &String, file_name: String) -> Result<(), String> {
-    if let Err(e) = fs::create_dir_all(output_path) {
-        return Err(format!(
-            "Unable to create output folder at {}: {}",
-            output_path, e
-        ));
-    }
-    let file_path = PathBuf::from(&output_path).join(file_name);
-    if let Err(e) = File::create(&file_path) {
-        return Err(format!(
-            "Unable to create file {}: {}",
-            file_path.to_str().unwrap_or_default(),
-            e
-        ));
-    }
-    Ok(())
-}
-
-pub fn append_output(output_path: &String, file_name: &str, data: &[f64]) -> Result<(), String> {
-    use std::io::Write;
-    let file_path = PathBuf::from(&output_path).join(file_name);
-    let mut file = match std::fs::OpenOptions::new().append(true).open(&file_path) {
-        Ok(f) => f,
-        Err(e) => {
-            return Err(format!(
-                "Unable to open file {}: {}",
-                file_path.to_str().unwrap_or_default(),
-                e
-            ));
-        }
-    };
-    let line = data
-        .iter()
-        .map(|v| v.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    if let Err(e) = writeln!(file, "{}", line) {
-        return Err(format!(
-            "Unable to write to file {}: {}",
-            file_path.to_str().unwrap_or_default(),
-            e
-        ));
-    }
-    Ok(())
-}
-
-pub type FloatMat = Mat<Own<f64, usize, usize>>;
-pub type ComplexMat = Mat<Own<Complex64, usize, usize>>;
-
-pub fn to_faer_mat<T>(mat: &[Vec<T>]) -> Option<Mat<Own<T>>>
-where
-    T: Add + Sub + Mul + Div + PartialOrd + Clone,
-{
-    let rows = mat.len();
-    let cols = mat[0].len();
-    if !mat.iter().all(|v| v.len() == cols) {
-        return None;
-    }
-    let m = Mat::from_fn(rows, cols, |i, j| mat[i][j].clone());
-    Some(m)
-}
-
-pub fn mat_as_complex(mat: &FloatMat) -> ComplexMat {
-    let (rows, cols) = mat.shape();
-    Mat::from_fn(rows, cols, |i, j| Complex64::from(mat[(i, j)]))
 }
