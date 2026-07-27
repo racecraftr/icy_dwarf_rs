@@ -10,7 +10,7 @@ use faer::{
     },
     traits::ComplexField,
 };
-use itertools::multizip;
+use itertools::{Itertools, multizip};
 use num::{
     complex::{Complex64, ComplexFloat},
     traits::Inv,
@@ -193,6 +193,35 @@ impl IcyDwarfInput {
                     &(&lv_imag * &pns),
                 )
             };
+
+        let cal_ekns = Scale::from_ref(&(-(s as f64) * 0.5).as_cplx())
+            * globe_time_average(&dns, &(&ll * &dns))
+            + Scale::from_ref(&-0.5.as_cplx()) * {
+                let rns = Scale::from_ref(&-I) * &rns;
+                globe_time_average(&rns, &(&ll * &rns))
+            };
+
+        let cal_epns = Scale::from_ref(&0.5.as_cplx()) * {
+            let pns = Scale::from_ref(&-I) * &pns;
+            let real_lv = lv
+                .triplet_iter()
+                .map(|t| Triplet::new(t.row, t.col, t.val.re.as_cplx()))
+                .collect_vec();
+            let real_lv =
+                SparseColMat::try_new_from_triplets(SH_TERMS, SH_TERMS, &real_lv).unwrap();
+            globe_time_average(&pns, &(real_lv * &pns))
+        };
+
+        let phi_rns = Col::from_iter((0..SH_TERMS).map(|i| {
+            let n = n_vec[i] as f64;
+            let p = (&pns)[i];
+            let g = tidal_pot_shc[i];
+            3. / (2. * n) * rho_ratio * p / g
+        }));
+
+        let p_fluidtide = cal_wns.iter().fold(0. + 0. * I, |acc, &n| acc + n);
+        let nkFsF = pns[nf - s] / tidal_pot_shc[nf - s];
+        let k_loven_f = phi_rns[nf - s];
         todo!()
     }
 }
