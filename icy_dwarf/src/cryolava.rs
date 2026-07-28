@@ -1,4 +1,4 @@
-use crate::consts::{G, KM, KM2CM, RHO_ADHS, RHO_H2OL, RHO_H2OS, RHO_NH3L};
+use crate::consts::{BAR, G, KM, KM2CM, RHO_ADHS, RHO_H2OL, RHO_H2OS, RHO_NH3L};
 use crate::input::Fracs;
 use crate::traits::float_traits::FloatExt;
 use crate::{consts::GRAM, input::IcyDwarfInput, thermal::ThermalOut};
@@ -227,20 +227,8 @@ impl IcyDwarfInput {
             let mut x_inf = 0.;
             let mut x_sup = X_SUP_BOUND;
 
-            let f_inf = f(
-                p_gas / crate::consts::BAR,
-                m_liq,
-                &abundances,
-                &k_rxn,
-                x_inf,
-            );
-            let f_sup = f(
-                p_gas / crate::consts::BAR,
-                m_liq,
-                &abundances,
-                &k_rxn,
-                x_sup,
-            );
+            let f_inf = f(p_gas / BAR, m_liq, &abundances, &k_rxn, x_inf);
+            let f_sup = f(p_gas / BAR, m_liq, &abundances, &k_rxn, x_sup);
 
             let mut x_vap_val = 0.0;
             if f_inf * f_sup > 0.0 {

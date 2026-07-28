@@ -1,6 +1,8 @@
-use std::{fs, path::Path};
+use std::{f64::consts::TAU, fs, path::Path};
 
-use crate::{consts::*, input::IcyDwarfInput, planet_system::ZoneState};
+use crate::{
+    consts::*, input::IcyDwarfInput, planet_system::ZoneState, traits::float_traits::FloatExt,
+};
 
 pub struct Data {
     pub atp: Vec<Vec<f64>>,
@@ -126,7 +128,7 @@ impl IcyDwarfInput {
                     * data.integral[integral_line][1]
                     * e_young
                     * DELTA_ALPHA
-                    / (2.0 * PI_GREEK * (1.0 - nu_poisson * nu_poisson))
+                    / (TAU * (1.0 - nu_poisson.powi(2)))
                     * (t_prime - zone.temp).abs()
                     - zone.pressure * (PI_GREEK * atp_val).sqrt();
             }
@@ -140,9 +142,7 @@ impl IcyDwarfInput {
             if output.crack > 0.0 {
                 output.p_hydr = 0.0;
                 // Initialize crack size
-                if output.crack_size == 0.0 {
-                    output.crack_size = SMALLEST_CRACK_SIZE;
-                }
+                output.crack_size.max_assign(SMALLEST_CRACK_SIZE);
                 output.crack_size_hydr_old = output.crack_size;
                 let x_bar = (2.0 * 4.5e-5 * (-45.0e3 / (R_G * zone.temp)).exp() * dtime).sqrt();
                 let num = zone.x_hydr_old * rho_hydr + (1.0 - zone.x_hydr_old) * rho_rock;
@@ -190,9 +190,7 @@ impl IcyDwarfInput {
         if dissolution_precipitation {
             if output.crack > 0.0 {
                 // Initialize crack size
-                if output.crack_size == 0.0 {
-                    output.crack_size = SMALLEST_CRACK_SIZE;
-                }
+                output.crack_size.max_assign(SMALLEST_CRACK_SIZE);
                 output.crack_size_diss_old = output.crack_size; // For output only
                 let mut d_crack_size = 0.0;
                 let surface_volume_ratio = 2.0 / output.crack_size; // Rimstidt and Barnes (1980) Fig. 6 for a cylinder/fracture

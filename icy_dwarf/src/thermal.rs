@@ -22,14 +22,16 @@ const K: f64 = 200.0e9 / GRAM * CM;
 
 impl IcyDwarfInput {
     pub fn thermal(&self, world_states: &mut [WorldState], dtime: f64) {
-        let tilt_scale: f64 = 1.0;
-
         for world_state in world_states.iter_mut() {
             // 1. Calculate Pressure
             self.calculate_pressure(world_state);
 
             // 2. Update Porosity & Radii (Creep & Compaction)
             self.update_porosity(world_state, dtime);
+
+            for zone in world_state.zones.iter_mut() {
+                self.crack(zone, dtime, todo!(), false);
+            }
 
             // Further thermal logic to be implemented
         }

@@ -117,7 +117,7 @@ impl IcyDwarfInput {
             (tilom + Complex64::I * diss_d[i]) * l_vec[i] - (s as f64) * tilom
                 + 1. / tilom * l_vec[i] / lv_values[i] * l_vec[i]
         }));
-        let l_vi = arr_to_diag(&[slowness.inv(); SH_TERMS]);
+        // let l_vi = arr_to_diag(&[slowness.inv(); SH_TERMS]);
         let l_li = arr_to_diag(&l_vec.map(|l| l.inv() + C0));
         let l_bi = arr_to_diag(&array::from_fn::<_, SH_TERMS, _>(|i| {
             (tilom + diss_d[i] * I).inv() * l_vec[i] - s as f64 * til_om
