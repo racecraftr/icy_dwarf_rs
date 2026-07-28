@@ -53,10 +53,10 @@ impl IcyDwarfInput {
         });
 
         let source_sink_shc = BASE_ARR;
-        let sh_deg_arr = BASE_ARR;
+        // let sh_deg_arr = BASE_ARR;
         let divergence_shc = BASE_ARR;
         let curl_shc = BASE_ARR;
-        let grav_potential = BASE_ARR;
+        // let grav_potential = BASE_ARR;
         let potential_dissipation = til_t.inv();
         let slowness = Complex64::new(1., potential_dissipation / til_om) / til_cesq;
 
