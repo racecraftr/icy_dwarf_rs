@@ -28,7 +28,6 @@ use num::complex::Complex64;
 use crate::{
     consts::{CM, GRAM, GYR2SEC, KM2CM, MYR2SEC},
     input::parse_toml,
-    thermal::ThermalOut,
 };
 
 #[allow(dead_code)]
@@ -44,9 +43,11 @@ struct Args {
 
     /// The path to the Data folder, in which inputs to subroutines will be read.
     /// By default, this will bes set to the Data folder in the current working directory.
-    #[arg(short, long, value_name = "DATA FOLDER")]
-    pub data_path: Option<String>,
+    #[arg(short, long, value_name = "DATA FOLDER", default_value = "Data/")]
+    pub data_path: String,
 }
+
+pub static GLOBAL_ARGS: LazyLock<Args> = LazyLock::new(|| Args::parse());
 
 fn main() {
     println!(
@@ -80,9 +81,11 @@ For more information, visit https://ww.gnu.org/licenses.
         exit(1);
     }
     println!("R_HOME found and populated: {}", &r_home);
-    let args = Args::parse();
-    let Some(mut input) = parse_toml(&args.input_path) else {
-        eprintln!("Could not parse/find input file {}", &args.input_path);
+    let Some(mut input) = parse_toml(&GLOBAL_ARGS.input_path) else {
+        eprintln!(
+            "Could not parse/find input file {}",
+            &GLOBAL_ARGS.input_path
+        );
         exit(1);
     };
     input.grid.time_total *= MYR2SEC;
@@ -106,19 +109,19 @@ For more information, visit https://ww.gnu.org/licenses.
     println!("{:?}", &input);
     if input.subroutines.run_therm {
         println!(">> Running thermal evolution code...");
-        input.planet_system(&args.output_folder);
+        input.planet_system(&GLOBAL_ARGS.output_folder);
     }
     if input.subroutines.run_comp {
         println!(">> Running compression routine...");
-        let Some(thermal_outputs) = input.read_thermal_out(&args.output_folder) else {
-            eprintln!("Could not read thermal output at {}", &args.output_folder);
+        let Some(thermal_outputs) = input.read_thermal_out(&GLOBAL_ARGS.output_folder) else {
+            eprintln!(
+                "Could not read thermal output at {}",
+                &GLOBAL_ARGS.output_folder
+            );
             exit(1);
         };
         if input
-            .compression(
-                &args.data_path.unwrap_or("Data/".to_owned()),
-                &thermal_outputs,
-            )
+            .compression(&GLOBAL_ARGS.data_path, &thermal_outputs)
             .is_none()
         {
             eprintln!("Could not calculate compression code");
@@ -127,8 +130,11 @@ For more information, visit https://ww.gnu.org/licenses.
     }
     if input.subroutines.run_cryo {
         println!(">> Running cryovolcanism code...");
-        let Some(thermal_outputs) = input.read_thermal_out(&args.output_folder) else {
-            eprintln!("Could not read thermal output at {}", &args.output_folder);
+        let Some(thermal_outputs) = input.read_thermal_out(&GLOBAL_ARGS.output_folder) else {
+            eprintln!(
+                "Could not read thermal output at {}",
+                &GLOBAL_ARGS.output_folder
+            );
             exit(1);
         };
         if let Err(s) = input.cryolava(&thermal_outputs, "") {
