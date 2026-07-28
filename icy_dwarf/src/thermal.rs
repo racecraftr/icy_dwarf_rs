@@ -1,4 +1,9 @@
-use std::{f64::consts::FRAC_PI_2, fs, process::exit, sync::LazyLock};
+use std::{
+    f64::consts::{FRAC_PI_2, PI},
+    fs,
+    process::exit,
+    sync::LazyLock,
+};
 
 use crate::{
     FloatMat,
@@ -6,6 +11,7 @@ use crate::{
         CM, E_YOUNG_OLIV, E_YOUNG_SERP, GCGS, GRAM, KM, KM2CM, NU_POISSON_OLIV, NU_POISSON_SERP,
         PA2BA, PI_GREEK,
     },
+    crack::read_data,
     input::{Fracs, IcyDwarfInput},
     planet_system::{RHO_ADHS_TH, RHO_H2OL_TH, RHO_H2OS_TH, RHO_NH3L_TH, WorldState, ZoneState},
     to_faer_mat,
@@ -21,7 +27,7 @@ use num::{
 const K: f64 = 200.0e9 / GRAM * CM;
 
 impl IcyDwarfInput {
-    pub fn thermal(&self, world_states: &mut [WorldState], dtime: f64) {
+    pub fn thermal(&self, world_states: &mut [WorldState], dtime: f64, data_folder: &String) {
         for world_state in world_states.iter_mut() {
             // 1. Calculate Pressure
             self.calculate_pressure(world_state);
@@ -30,10 +36,50 @@ impl IcyDwarfInput {
             self.update_porosity(world_state, dtime);
 
             for zone in world_state.zones.iter_mut() {
-                self.crack(zone, dtime, todo!(), false);
+                self.crack(zone, dtime, &read_data(data_folder).unwrap(), false);
             }
 
-            // Further thermal logic to be implemented
+            self.tide(world_state);
+
+            let n_zones = world_state.zones.len();
+            for zone in world_state.zones.iter_mut() {
+                zone.kappa = zone.kapcond(&self.world_spec);
+            }
+
+            let mut rrflux = vec![0.0; n_zones + 1];
+            for i in 1..n_zones {
+                let r_i = world_state.zones[i].radius;
+                let r_next = world_state.zones[i].radius + world_state.zones[i].dr;
+                let r_prev = world_state.zones[i - 1].radius;
+                rrflux[i] = -(r_i * r_i)
+                    * (world_state.zones[i].kappa + world_state.zones[i - 1].kappa)
+                    * (world_state.zones[i].temp - world_state.zones[i - 1].temp)
+                    / (r_next - r_prev);
+            }
+
+            for zone in world_state.zones.iter_mut() {
+                zone.temp_old = zone.temp;
+            }
+
+            for i in 0..n_zones - 1 {
+                let qth = world_state.zones[i].tide_heat_rate * 1.0e7;
+                world_state.zones[i].energy_total +=
+                    dtime * qth + 4.0 * PI * dtime * (rrflux[i] - rrflux[i + 1]);
+            }
+
+            let x_salt = if self
+                .worlds
+                .iter()
+                .find(|w| w.name == world_state.name)
+                .map_or(false, |w| w.briny)
+            {
+                0.01
+            } else {
+                0.0
+            };
+            for i in 0..n_zones {
+                let _ = world_state.zones[i].apply_state(x_salt);
+            }
         }
     }
 
@@ -374,6 +420,54 @@ impl ZoneState {
             (a + a_t * x_pow, b + b_t * x_pow)
         });
         (a + b / self.temp).exp()
+    }
+
+    pub fn kapcond(&self, world_spec: &crate::input::WorldSpec) -> f64 {
+        use crate::consts::*;
+        let kaph2os = 5.67e7 / self.temp;
+        let vrock = self.mass_rock
+            / (self.x_hydr * world_spec.rho_hydr_th()
+                + (1.0 - self.x_hydr) * world_spec.rho_rock_th());
+        let vh2os = self.mass_ice / crate::planet_system::RHO_H2OS_TH;
+        let vadhs = self.mass_ammonia_solid / crate::planet_system::RHO_ADHS_TH;
+        let vh2ol = self.mass_water / crate::planet_system::RHO_H2OL_TH;
+        let vnh3l = self.mass_ammonia_liquid / crate::planet_system::RHO_NH3L_TH;
+        let total_vol =
+            4.0 / 3.0 * PI_GREEK * ((self.radius + self.dr).powi(3) - self.radius.powi(3));
+
+        let frock = vrock / total_vol;
+        let fh2os = vh2os / total_vol;
+        let fadhs = vadhs / total_vol;
+        let fh2ol = vh2ol / total_vol;
+        let fnh3l = vnh3l / total_vol;
+
+        let mut kap = 0.0;
+        if frock >= 1.0 - 1.0e-5 {
+            kap = self.x_hydr * KAPHYDR + (1.0 - self.x_hydr) * KAPROCK;
+            kap *= ((-4.0 * self.porosity / 0.08).exp()
+                + (-4.4 - 4.0 * self.porosity / 0.17).exp())
+            .powf(0.25);
+        } else {
+            let mut kapice = 0.0;
+            if fh2os + fadhs + fh2ol + fnh3l > 0.0 {
+                kapice = fh2os * kaph2os.ln()
+                    + fadhs * KAPADHS.ln()
+                    + fh2ol * KAPH2OL.ln()
+                    + fnh3l * KAPNH3L.ln();
+                kapice /= fh2os + fadhs + fh2ol + fnh3l;
+                kapice = kapice.exp();
+            }
+            let krock = self.x_hydr * KAPHYDR + (1.0 - self.x_hydr) * KAPROCK;
+            let b1 = -krock * (3.0 * frock - 1.0) - kapice * (2.0 - 3.0 * frock);
+            let c1 = -krock * kapice;
+            kap = (-b1 + (b1 * b1 - 8.0 * c1).sqrt()) / 4.0;
+            if self.porosity < 0.7 {
+                kap *= (1.0 - self.porosity / 0.7).powf(4.1 * self.porosity + 0.22);
+            } else {
+                kap = 0.0;
+            }
+        }
+        kap
     }
 }
 

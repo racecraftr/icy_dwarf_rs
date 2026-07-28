@@ -3,7 +3,7 @@ use std::f64::consts::{FRAC_PI_3, PI};
 use itertools::Itertools;
 
 use crate::{
-    append_output,
+    GLOBAL_ARGS, append_output,
     consts::*,
     crack, create_output,
     input::{Fracs, IcyDwarfInput, IcyWorld, TidalQ, WorldSpec},
@@ -433,7 +433,7 @@ impl IcyDwarfInput {
             }
 
             // Call Thermal logic
-            self.thermal(&mut world_states, dtime);
+            self.thermal(&mut world_states, dtime, &GLOBAL_ARGS.data_path);
 
             isteps += 1;
 
