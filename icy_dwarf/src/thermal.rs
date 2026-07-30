@@ -2,7 +2,6 @@ use std::{
     f64::consts::{FRAC_PI_2, PI},
     fs,
     process::exit,
-    sync::LazyLock,
 };
 
 use crate::{
@@ -27,7 +26,7 @@ use num::{
 const K: f64 = 200.0e9 / GRAM * CM;
 
 impl IcyDwarfInput {
-    pub fn thermal(&self, world_states: &mut [WorldState], dtime: f64, data_folder: &String) {
+    pub fn thermal(&self, world_states: &mut [WorldState], dtime: f64, real_time: f64, data_folder: &String) {
         for world_state in world_states.iter_mut() {
             // 1. Calculate Pressure
             self.calculate_pressure(world_state);
@@ -35,43 +34,96 @@ impl IcyDwarfInput {
             // 2. Update Porosity & Radii (Creep & Compaction)
             self.update_porosity(world_state, dtime);
 
+            // 3. Cracking
             for zone in world_state.zones.iter_mut() {
                 self.crack(zone, dtime, &read_data(data_folder).unwrap(), false);
             }
 
+            // 4. Tidal heating (solid)
             self.tide(world_state);
+            world_state.heat_tide += world_state.w_tide_tot;
 
             let n_zones = world_state.zones.len();
+
+            // 5. Radioactive Decay Heating (Qth)
+            let mut qth = vec![0.0; n_zones];
+            let frac_k_leached = 0.0;
+
+            let mut q_kleached_tot = 0.0;
+            let mut m_liq_tot = 0.0;
+            let mut irh2os = n_zones.saturating_sub(1);
+
+            for (i, zone) in world_state.zones.iter().enumerate() {
+                let (q_zone, q_k) = zone.decay(real_time, frac_k_leached, &self.world_spec);
+                qth[i] += q_zone;
+                q_kleached_tot += q_k;
+                m_liq_tot += zone.mass_water;
+                if zone.mass_ice > 0.0 && i < irh2os {
+                    irh2os = i;
+                }
+            }
+
+            // Distribute heat from leached radionuclides among layers containing liquid water
+            if m_liq_tot > 0.0 {
+                for (i, zone) in world_state.zones.iter().enumerate() {
+                    qth[i] += q_kleached_tot * zone.mass_water / m_liq_tot;
+                }
+            } else if n_zones > 0 {
+                qth[irh2os] += q_kleached_tot;
+            }
+
+            // Track total radioactive heat
+            for &q in &qth {
+                world_state.heat_radio += q;
+            }
+
+            // Add tidal heating to Qth
+            for (i, zone) in world_state.zones.iter().enumerate() {
+                qth[i] += zone.tide_heat_rate * 1.0e7;
+            }
+
+            // 6. Thermal Conductivity
             for zone in world_state.zones.iter_mut() {
                 zone.kappa = zone.kapcond(&self.world_spec);
             }
 
+            // TODO: Convection routines (convect) when ported
+
+            // 7. Conductive Fluxes (rrflux)
             let mut rrflux = vec![0.0; n_zones + 1];
             for i in 1..n_zones {
-                let r_i = world_state.zones[i].radius;
-                let r_next = world_state.zones[i].radius + world_state.zones[i].dr;
-                let r_prev = world_state.zones[i - 1].radius;
-                rrflux[i] = -(r_i * r_i)
-                    * (world_state.zones[i].kappa + world_state.zones[i - 1].kappa)
-                    * (world_state.zones[i].temp - world_state.zones[i - 1].temp)
-                    / (r_next - r_prev);
+                let r_i = world_state.zones[i - 1].radius;
+                let r_next = world_state.zones[i].radius;
+                let r_prev = if i > 1 {
+                    world_state.zones[i - 2].radius
+                } else {
+                    0.0
+                };
+                let dr_denom = r_next - r_prev;
+                if dr_denom > 0.0 {
+                    rrflux[i] = -(r_i * r_i)
+                        * (world_state.zones[i].kappa + world_state.zones[i - 1].kappa)
+                        * (world_state.zones[i].temp - world_state.zones[i - 1].temp)
+                        / dr_denom;
+                }
             }
 
+            // 8. Memorize Old Temperatures
             for zone in world_state.zones.iter_mut() {
                 zone.temp_old = zone.temp;
             }
 
-            for i in 0..n_zones - 1 {
-                let qth = world_state.zones[i].tide_heat_rate * 1.0e7;
+            // 9. Solve Heat Equation (Energy Update)
+            for i in 0..n_zones.saturating_sub(1) {
                 world_state.zones[i].energy_total +=
-                    dtime * qth + 4.0 * PI * dtime * (rrflux[i] - rrflux[i + 1]);
+                    dtime * qth[i] + 4.0 * PI_GREEK * dtime * (rrflux[i] - rrflux[i + 1]);
             }
 
+            // 10. Phase Equilibrium / State Update
             let x_salt = if self
                 .worlds
                 .iter()
-                .find(|w| w.name == world_state.name)
-                .map_or(false, |w| w.briny)
+                .any(|w| w.briny && w.name == world_state.name)
             {
                 0.01
             } else {
@@ -79,6 +131,28 @@ impl IcyDwarfInput {
             };
             for i in 0..n_zones {
                 let _ = world_state.zones[i].apply_state(x_salt);
+            }
+
+            // 11. Surface Boundary Condition
+            let temp_surf = self
+                .worlds
+                .iter()
+                .find(|w| w.name == world_state.name)
+                .map(|w| w.temp_surf)
+                .unwrap_or_else(|| {
+                    world_state
+                        .zones
+                        .last()
+                        .map(|z| z.temp)
+                        .unwrap_or(70.0)
+                });
+
+            if let Some(last_zone) = world_state.zones.last_mut() {
+                let e_rock = last_zone.mass_rock * crate::planet_system::heat_rock(temp_surf);
+                let e_h2os = last_zone.mass_ice * crate::consts::QH2O * temp_surf.powi(2) * 0.5;
+                let e_slush = last_zone.mass_ammonia_solid * crate::consts::QADH * temp_surf.powi(2) * 0.5;
+                last_zone.energy_total = e_rock + e_h2os + e_slush;
+                last_zone.temp = temp_surf;
             }
         }
     }
@@ -112,7 +186,7 @@ impl IcyDwarfInput {
         let mut shearmod = vec![Complex64::ZERO; world_state.zones.len()];
         let mut rho = base_vec.clone();
 
-        let mu_rigid_ice = 4.0e9 / GRAM * CM;
+        const MU_RIGID_ICE: f64 = 4.0e9 / GRAM * CM;
 
         // accumulated mass throughout all the zones.
         let mut m_acc = base_vec.clone();
@@ -152,7 +226,7 @@ impl IcyDwarfInput {
             let mut mu_rigid =
                 if z.mass_ice + z.mass_ammonia_solid + z.mass_water + z.mass_ammonia_liquid > 0. {
                     let phi = 1. - zone.fracs().0;
-                    mu_rigid_ice
+                    MU_RIGID_ICE
                         * if phi < 0.3 {
                             mu_rigid_rock * 0.3_f64.exp()
                         } else {
@@ -265,7 +339,8 @@ impl IcyDwarfInput {
             }
         } / 7.;
 
-        for (idx, zone) in world_state.zones.iter().enumerate().skip(1) {
+        let last_radius = world_state.zones.last().map(|z| z.radius).unwrap_or(0.0);
+        for (idx, zone) in world_state.zones.iter_mut().enumerate().skip(1) {
             let r_out = zone.radius + zone.dr;
             let x = 2. * y_tide[idx][0] - 6. * y_tide[idx][1];
             let h_mu = 4. / 3.
@@ -282,7 +357,7 @@ impl IcyDwarfInput {
                 zone.volumes().0
                     * 2.
                     * world_state.omega.powi(5)
-                    * world_state.zones.last().unwrap().radius.powi(4)
+                    * last_radius.powi(4)
                     * (eterm + world_state.obl.sin() / 7.)
                     / r_out.powi(2)
                     * h_mu
@@ -291,6 +366,7 @@ impl IcyDwarfInput {
                 0.
             };
             world_state.w_tide_tot += w_tide;
+            zone.tide_heat_rate = w_tide / 1.0e7;
         }
     }
 
@@ -391,6 +467,100 @@ impl ZoneState {
             self.x_hydr,
         )
     }
+
+    /// Computes per-zone radiogenic heating from radioactive decay.
+    ///
+    /// Ports the C `decay()` function from `Thermal.h`. Calculates heating from
+    /// long-lived radionuclides (²³⁵U, ²³⁸U, ²³²Th), short-lived ²⁶Al, and ⁴⁰K,
+    /// scaled for hydration (hydrated rock has more mass from -OH but no extra
+    /// radionuclides).
+    ///
+    /// Returns `(qth, q_kleached)`:
+    /// - `qth`: radiogenic heating in this zone (erg/s), including non-leached ⁴⁰K
+    /// - `q_kleached`: leached ⁴⁰K heating contribution from this zone (erg/s),
+    ///   to be distributed among liquid-bearing zones by the caller
+    pub fn decay(
+        &self,
+        t: f64,
+        frac_k_leached: f64,
+        world_spec: &crate::input::WorldSpec,
+    ) -> (f64, f64) {
+        use crate::consts::{GYR2SEC, MEV2ERG};
+
+        const LN2: f64 = 0.6931;
+        // Grams^-1 / # of Si atoms: 1e6 atoms * nucleon mass in grams * avg molar mass of rock
+        const SI: f64 = 1.0 / (1.0e6 * 1.67e-24 * 151.0);
+
+        // Half-lives in Gyr
+        const T_HALF_U235: f64 = 0.704;
+        const T_HALF_U238: f64 = 4.47;
+        const T_HALF_TH232: f64 = 14.0;
+        const T_HALF_K40: f64 = 1.265;
+        const T_HALF_AL26: f64 = 0.000716;
+
+        // Decay energies in MeV (parent-daughter mass deficit minus ~1 MeV per neutrino)
+        const DE_U235: f64 = 46.74 - 4.0;
+        const DE_U238: f64 = 52.07 - 6.0;
+        const DE_TH232: f64 = 42.96 - 4.0;
+        const DE_K40: f64 = 0.6087;
+        const DE_AL26: f64 = 3.117;
+
+        // Initial abundances per 1e6 Si atoms
+        // CI (default)
+        const CI_U235: f64 = 0.00592;
+        const CI_U238: f64 = 0.01871;
+        const CI_TH232: f64 = 0.04399;
+        const CI_K40: f64 = 5.244;
+        // CO
+        const CO_U235: f64 = 0.00619;
+        const CO_U238: f64 = 0.01942;
+        const CO_TH232: f64 = 0.04293;
+        const CO_K40: f64 = 2.219;
+
+        // 26Al initial abundance: (26Al/27Al) * Al per 1e6 Si = 5e-5 * 8.41e4
+        const AL26_INIT: f64 = 5.0e-5 * 8.41e4;
+
+        let exp_decay = |t_half: f64| (-t * LN2 / (t_half * GYR2SEC)).exp();
+
+        // Long-lived radionuclides: select abundances by chondrite type
+        // C code: chondr==1 → CO, chondr==2 → CV, else → CI
+        // Rust: chondrite bool — true → CO, false → CI (CV not in Rust enum)
+        let (n_u235, n_u238, n_th232, n_k40) = if world_spec.chondrite {
+            (CO_U235, CO_U238, CO_TH232, CO_K40)
+        } else {
+            (CI_U235, CI_U238, CI_TH232, CI_K40)
+        };
+
+        let mut s = n_u235 * DE_U235 / T_HALF_U235 * exp_decay(T_HALF_U235)
+            + n_u238 * DE_U238 / T_HALF_U238 * exp_decay(T_HALF_U238)
+            + n_th232 * DE_TH232 / T_HALF_TH232 * exp_decay(T_HALF_TH232);
+
+        // Short-lived 26Al
+        s += AL26_INIT * DE_AL26 / T_HALF_AL26 * exp_decay(T_HALF_AL26);
+
+        // Convert to erg/s/g
+        s *= SI * MEV2ERG / GYR2SEC * LN2;
+        let s_k =
+            n_k40 * DE_K40 / T_HALF_K40 * exp_decay(T_HALF_K40) * SI * MEV2ERG / GYR2SEC * LN2;
+
+        // Per-zone radiogenic heating, scaled for hydration:
+        // Hydrated rock has extra mass from -OH groups but no extra radionuclides,
+        // so we subtract the water mass bound in the hydrated mineral structure.
+        let rho_h2ol_th = crate::planet_system::RHO_H2OL_TH;
+        let rho_rock_th = world_spec.rho_rock_th();
+        let rho_hydr_th = world_spec.rho_hydr_th();
+
+        let m_rock_dry = self.mass_rock
+            - rho_h2ol_th
+                * (self.mass_rock
+                    / (self.x_hydr * rho_hydr_th + (1.0 - self.x_hydr) * rho_rock_th)
+                    - self.mass_rock / rho_rock_th);
+
+        let qth = m_rock_dry * (s + (1.0 - frac_k_leached) * s_k);
+        let q_kleached = m_rock_dry * frac_k_leached * s_k;
+
+        (qth, q_kleached)
+    }
 }
 
 impl ZoneState {
@@ -441,7 +611,7 @@ impl ZoneState {
         let fh2ol = vh2ol / total_vol;
         let fnh3l = vnh3l / total_vol;
 
-        let mut kap = 0.0;
+        let mut kap: f64;
         if frock >= 1.0 - 1.0e-5 {
             kap = self.x_hydr * KAPHYDR + (1.0 - self.x_hydr) * KAPROCK;
             kap *= ((-4.0 * self.porosity / 0.08).exp()
@@ -460,7 +630,7 @@ impl ZoneState {
             let krock = self.x_hydr * KAPHYDR + (1.0 - self.x_hydr) * KAPROCK;
             let b1 = -krock * (3.0 * frock - 1.0) - kapice * (2.0 - 3.0 * frock);
             let c1 = -krock * kapice;
-            kap = (-b1 + (b1 * b1 - 8.0 * c1).sqrt()) / 4.0;
+            kap = (-b1 + (b1 * b1 - 8.0 * c1).sqrt()) * 0.25;
             if self.porosity < 0.7 {
                 kap *= (1.0 - self.porosity / 0.7).powf(4.1 * self.porosity + 0.22);
             } else {
@@ -478,10 +648,11 @@ fn creep(t: f64, p: f64, x_ice: f64, porosity: f64, x_hydr: f64) -> f64 {
     let eps_disl = 4.0e5 * eff_p.powi(4) * (-60.0e3 / (R_G * t)).exp();
 
     let eps_basal = if t < 255.0 {
-        3.9e-3 * eff_p.powf(1.8) * D_FLOW_LAW.powf(-1.4) * (-49.0e3 / (R_G * t)).exp()
+        3.9e-3 * (-49.0e3 / (R_G * t)).exp()
     } else {
-        3.0e26 * eff_p.powf(1.8) * D_FLOW_LAW.powf(-1.4) * (-192.0e3 / (R_G * t)).exp()
-    };
+        3.0e26 * (-192.0e3 / (R_G * t)).exp()
+    } * eff_p.powf(1.8)
+        * D_FLOW_LAW.powf(-1.4);
 
     let eps_gbs = 5.5e7 * eff_p.powf(2.4) * (-60.0e3 / (R_G * t)).exp();
     let eps_diff = 3.02e-14 * eff_p.powi(1) * D_FLOW_LAW.powi(-2) * (-59.4e3 / (R_G * t)).exp();
@@ -516,13 +687,13 @@ pub fn prop_mtx(
     if nr == 0 {
         return Vec::new();
     }
-    assert!(r.len() >= nr);
-    assert!(g.len() >= nr);
-    assert!(shearmod.len() >= nr);
-
     if ir_core >= nr {
         return vec![vec![Complex64::ZERO; 6]; nr];
     }
+
+    assert!(r.len() >= nr);
+    assert!(g.len() >= nr);
+    assert!(shearmod.len() >= nr);
 
     let mut ypropmtx = vec![[[Complex64::ZERO; 6]; 6]; nr];
     let mut ypropinv = vec![[[Complex64::ZERO; 6]; 6]; nr];
@@ -538,10 +709,10 @@ pub fn prop_mtx(
         let rho_g_r = Complex64::from(rho[ir] * g[ir] * r_val);
         let sm = shearmod[ir];
         let four_pi_g_rho = Complex64::from(4.0 * PI_GREEK * GCGS * rho[ir]);
-        let two_pi_g_rho = Complex64::from(2.0 * PI_GREEK * GCGS * rho[ir]);
+        let two_pi_g_rho = four_pi_g_rho * 0.5;
 
         let rho_g_r_over_sm = rho_g_r / sm;
-        let r_over_sm = Complex64::from(r_val) / sm;
+        let r_over_sm = r_val / sm;
 
         ypropmtx[ir] = [
             [
