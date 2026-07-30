@@ -433,7 +433,12 @@ impl IcyDwarfInput {
             }
 
             // Call Thermal logic
-            self.thermal(&mut world_states, dtime, &GLOBAL_ARGS.data_path);
+            self.thermal(
+                &mut world_states,
+                dtime,
+                real_time,
+                &GLOBAL_ARGS.data_folder,
+            );
 
             isteps += 1;
 
@@ -627,10 +632,15 @@ impl TidalQ {
         match self.mode {
             crate::input::QMode::Lin => self.init + (self.today - self.init) * scaling,
             crate::input::QMode::ExpDecay => {
-                self.init * ((self.today / self.init).ln() * scaling).exp()
+                // self.init * ((self.today / self.init).ln() * scaling).exp()
+                //
+                // init * e^(ln(today / init) * scaling)
+                // = init * (e^ln(today/init))^scaling
+                // = init * (today/init) ^ scaling
+                self.init * (self.today / self.init).powf(scaling)
             }
             crate::input::QMode::ExpChange => {
-                self.init + 1. - self.init * ((self.today - self.init + 1.).ln() * scaling).exp()
+                self.init + 1. - self.init * (self.today - self.init + 1.).powf(scaling)
             }
         }
     }

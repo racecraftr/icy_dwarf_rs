@@ -242,7 +242,6 @@ impl IcyDwarfInput {
                             let inner_term = (output.act[i] / RHO_H2OL).powf(nu_prod[i]) / k_eq[i];
                             let r_diss = surface_volume_ratio
                                 * (-ea_diss[i] / (R_G * zone.temp)).exp()
-                                * 1.0
                                 * (1.0 - inner_term.powf(mu_xu[i]));
 
                             // Update crack size and update act[i]
