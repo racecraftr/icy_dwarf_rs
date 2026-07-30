@@ -31,7 +31,13 @@ const BASE_ARR: [Complex64; SH_TERMS] = [Complex64::ZERO; SH_TERMS];
 impl IcyDwarfInput {
     /// Port of the Tropf function from MatLab to Rust.
     /// Why? Well, MatLab ain't free...
-    /// Combines the TROPF and tropf functions from the original C code.
+    /// Combines the TROPF and tropf functions from the original C code. Makes some optimizations to get
+    /// rid of unused variables.
+    // Since pointers are not neede in rust to return multiple values,
+    // It becomes easier to find which values are and are not being used.
+    // If we go through the original IcyDwarf code,
+    // We see that these values are assigned to in function parameters via pointers,
+    // but are never actually used in the main function. Thus we can discard them.
     pub fn tropf(
         &self,
         til_cesq: f64,
@@ -39,7 +45,7 @@ impl IcyDwarfInput {
         tilom: Complex64,
         s: usize,
         pn_fsf_amp: f64,
-    ) -> (Complex64, f64, f64) {
+    ) -> (Complex64, Complex64, Complex64) {
         let diss_type = DissType::KinPE; // note that this is always true.
         let nf = 2_usize;
         let til_om = 1_f64;
@@ -61,17 +67,17 @@ impl IcyDwarfInput {
         let slowness = Complex64::new(1., potential_dissipation / til_om) / til_cesq;
 
         let attn_hori = til_t.inv();
-        let attn_vert = attn_hori;
+        // let attn_vert = attn_hori;
 
         let n_vec: [_; SH_TERMS] = array::from_fn(|i| s + i);
 
         let diss_d =
             n_vec.map(|x| (attn_hori * (x + s) as f64 + C0).instead_of(C0, f64::MIN_POSITIVE + C0));
-        let diss_r =
-            n_vec.map(|x| (attn_vert * (x + s) as f64 + C0).instead_of(C0, f64::MIN_POSITIVE + C0));
+        // let diss_r =
+        //     n_vec.map(|x| (attn_vert * (x + s) as f64 + C0).instead_of(C0, f64::MIN_POSITIVE + C0));
 
-        let l_alpha_d = arr_to_diag(&diss_d);
-        let l_alpha_r = arr_to_diag(&diss_r);
+        // let l_alpha_d = arr_to_diag(&diss_d);
+        // let l_alpha_r = arr_to_diag(&diss_r);
         let lv_values = [slowness; SH_TERMS];
         let lv = arr_to_diag(&lv_values);
 
@@ -82,7 +88,7 @@ impl IcyDwarfInput {
         if l_vec[0] == 0. {
             l_vec[0] = f64::MIN_POSITIVE
         }
-        let ll = arr_to_diag(&l_vec.map(|n| n + C0));
+        // let ll = arr_to_diag(&l_vec.map(|n| n + C0));
         let la = arr_to_diag(&array::from_fn::<_, SH_TERMS, _>(|i| {
             (tilom + Complex64::I * diss_d[i]) * l_vec[i] - s as f64 * til_om
         }));
@@ -113,10 +119,10 @@ impl IcyDwarfInput {
         let lc = SparseColMat::try_new_from_triplets(2 * SH_TERMS - 2, 2 * SH_TERMS - 2, &triplets)
             .unwrap();
 
-        let ld = arr_to_diag(&array::from_fn::<_, SH_TERMS, _>(|i| {
-            (tilom + Complex64::I * diss_d[i]) * l_vec[i] - (s as f64) * tilom
-                + 1. / tilom * l_vec[i] / lv_values[i] * l_vec[i]
-        }));
+        // let ld = arr_to_diag(&array::from_fn::<_, SH_TERMS, _>(|i| {
+        //     (tilom + Complex64::I * diss_d[i]) * l_vec[i] - (s as f64) * tilom
+        //         + 1. / tilom * l_vec[i] / lv_values[i] * l_vec[i]
+        // }));
         // let l_vi = arr_to_diag(&[slowness.inv(); SH_TERMS]);
         let l_li = arr_to_diag(&l_vec.map(|l| l.inv() + C0));
         let l_bi = arr_to_diag(&array::from_fn::<_, SH_TERMS, _>(|i| {
@@ -148,9 +154,9 @@ impl IcyDwarfInput {
         let lhs_p = &q_tilp + &tidal_pot_shc_col;
 
         let pns = solve(&(&l_tilp + &iln_vals), &lhs_p);
-        let dns = &l_li * &(Scale::from_ref(&tilom) * &lv * &pns + &source_sink_shc_col);
+        // let dns = &l_li * &(Scale::from_ref(&tilom) * &lv * &pns + &source_sink_shc_col);
 
-        let rns = &(-&l_bi) * (&lc * &dns + &curl_shc_col);
+        // let rns = &(-&l_bi) * (&lc * &dns + &curl_shc_col);
 
         let globe_time_average = |s_c: &Col<Complex64>, t_c: &Col<Complex64>| -> Col<Complex64> {
             Col::from_iter(
@@ -177,40 +183,43 @@ impl IcyDwarfInput {
             cal_wns_temp + cal_wns_1
         };
 
-        let cal_dns = Scale::from_ref(&-0.5.as_cplx())
-            * (globe_time_average(&dns, &(&ll * &l_alpha_d * &dns))
-                + globe_time_average(&(&l_alpha_d * &dns), &(&ll * &dns))
-                + {
-                    let rns = Scale::from_ref(&-I) * &rns;
-                    globe_time_average(&rns, &(&ll * &l_alpha_r * &rns))
-                        + globe_time_average(&(&l_alpha_r * &rns), &(&ll * &rns))
-                })
-            + {
-                let pns = Scale::from_ref(&-I) * &pns;
-                let lv_imag = arr_to_diag(&lv_values.map(|n| n.im.as_cplx()));
-                globe_time_average(
-                    &(Scale::from_ref(&til_om.as_cplx()) * &pns),
-                    &(&lv_imag * &pns),
-                )
-            };
+        // None of this is being used in the final result from the original C tropf function,
+        // so no point in calculating it.
+        //
+        // let cal_dns = Scale::from_ref(&-0.5.as_cplx())
+        //     * (globe_time_average(&dns, &(&ll * &l_alpha_d * &dns))
+        //         + globe_time_average(&(&l_alpha_d * &dns), &(&ll * &dns))
+        //         + {
+        //             let rns = Scale::from_ref(&-I) * &rns;
+        //             globe_time_average(&rns, &(&ll * &l_alpha_r * &rns))
+        //                 + globe_time_average(&(&l_alpha_r * &rns), &(&ll * &rns))
+        //         })
+        //     + {
+        //         let pns = Scale::from_ref(&-I) * &pns;
+        //         let lv_imag = arr_to_diag(&lv_values.map(|n| n.im.as_cplx()));
+        //         globe_time_average(
+        //             &(Scale::from_ref(&til_om.as_cplx()) * &pns),
+        //             &(&lv_imag * &pns),
+        //         )
+        //     };
 
-        let cal_ekns = Scale::from_ref(&(-(s as f64) * 0.5).as_cplx())
-            * globe_time_average(&dns, &(&ll * &dns))
-            + Scale::from_ref(&-0.5.as_cplx()) * {
-                let rns = Scale::from_ref(&-I) * &rns;
-                globe_time_average(&rns, &(&ll * &rns))
-            };
+        // let cal_ekns = Scale::from_ref(&(-(s as f64) * 0.5).as_cplx())
+        //     * globe_time_average(&dns, &(&ll * &dns))
+        //     + Scale::from_ref(&-0.5.as_cplx()) * {
+        //         let rns = Scale::from_ref(&-I) * &rns;
+        //         globe_time_average(&rns, &(&ll * &rns))
+        //     };
 
-        let cal_epns = Scale::from_ref(&0.5.as_cplx()) * {
-            let pns = Scale::from_ref(&-I) * &pns;
-            let real_lv = lv
-                .triplet_iter()
-                .map(|t| Triplet::new(t.row, t.col, t.val.re.as_cplx()))
-                .collect_vec();
-            let real_lv =
-                SparseColMat::try_new_from_triplets(SH_TERMS, SH_TERMS, &real_lv).unwrap();
-            globe_time_average(&pns, &(real_lv * &pns))
-        };
+        // let cal_epns = Scale::from_ref(&0.5.as_cplx()) * {
+        //     let pns = Scale::from_ref(&-I) * &pns;
+        //     let real_lv = lv
+        //         .triplet_iter()
+        //         .map(|t| Triplet::new(t.row, t.col, t.val.re.as_cplx()))
+        //         .collect_vec();
+        //     let real_lv =
+        //         SparseColMat::try_new_from_triplets(SH_TERMS, SH_TERMS, &real_lv).unwrap();
+        //     globe_time_average(&pns, &(real_lv * &pns))
+        // };
 
         let phi_rns = Col::from_iter((0..SH_TERMS).map(|i| {
             let n = n_vec[i] as f64;
@@ -220,9 +229,10 @@ impl IcyDwarfInput {
         }));
 
         let p_fluidtide = cal_wns.iter().fold(0. + 0. * I, |acc, &n| acc + n);
-        let nkFsF = pns[nf - s] / tidal_pot_shc[nf - s];
+        let nk_fsf = pns[nf - s] / tidal_pot_shc[nf - s];
         let k_loven_f = phi_rns[nf - s];
-        todo!()
+
+        (p_fluidtide, nk_fsf, k_loven_f)
     }
 }
 
@@ -291,6 +301,8 @@ fn bicgstab(a: &[Vec<Complex64>], b: &[Complex64]) -> Vec<Complex64> {
 }
 
 /// Finds the complex eigenvalues of a real matrix.
+// This function is also unused.
+// Perhaps some other time...
 fn eigen(mtx: &[Vec<f64>]) -> Option<Vec<Complex64>> {
     let rows = mtx.len();
     let cols = mtx[0].len();
