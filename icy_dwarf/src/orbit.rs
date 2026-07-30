@@ -15,7 +15,10 @@
 //! Public License for more details. You should have received a copy of the GNU
 //! General Public License along with this program. If not, see
 //! <http://www.gnu.org/licenses/>.
+use std::path::PathBuf;
+
 use crate::{
+    GLOBAL_ARGS,
     consts::{GCGS, GYR2SEC, IJMAX, MIN_ECC, MYR2SEC},
     input::IcyDwarfInput,
     planet_system::WorldState,
@@ -328,15 +331,16 @@ impl IcyDwarfInput {
                 w_im.cr_epep_old = cr_epep;
                 w_i.cr_epep_old = cr_epep;
 
-                if [e0, e1].iter().any(|&e| (0..=1).contains(&(e as i32))) {
+                if (0. <= e0 && e0 <= 1.) || (0. <= e1 && e1 <= 1.) {
                     use std::fs::OpenOptions;
                     use std::io::Write;
-                    if let Ok(mut file) = OpenOptions::new()
-                        .append(true)
-                        .open("Outputs/Resonances.txt")
-                    {
+                    if let Ok(mut res_file) = {
+                        let mut res_path = PathBuf::from(&GLOBAL_ARGS.output_folder);
+                        res_path.push("Resonances.txt");
+                        OpenOptions::new().append(true).open(res_path)
+                    } {
                         let _ = writeln!(
-                            file,
+                            res_file,
                             "Time {} Myr, eccentricity out of bounds. Stopping.",
                             real_time / MYR2SEC
                         );
@@ -481,25 +485,24 @@ impl IcyDwarfInput {
                 let e6 = e2 * e4;
                 let e8 = e4 * e4;
 
+                let grav = GCGS * m_prim * mass_moon;
                 let n_val =
                     (1.0 + 7.5 * e2 + 45.0 / 8.0 * e4 + 5.0 / 16.0 * e6) / (1.0 - e2).powi(6);
                 let n_a =
                     (1.0 + 16.5 * e2 + 255.0 / 8.0 * e4 + 185.0 / 16.0 * e6 + 25.0 / 64.0 * e8)
                         / (1.0 - e2).powf(7.5);
-                let o_e = (1.0 + 1.5 * e2 + 1.0 / 8.0 * e4) / (1.0 - e2).powi(5);
-                let n_e =
-                    (1.0 + 3.25 * e2 + 15.0 / 8.0 * e4 + 5.0 / 64.0 * e6) / (1.0 - e2).powf(6.5);
-                let o_e_val = (1.0 + 3.0 * e2 + 3.0 / 8.0 * e4) / (1.0 - e2).powf(4.5);
+                let o_e = (1.0 + 1.5 * e2 + 0.125 * e4) / (1.0 - e2).powi(5);
+                let n_e = (1.0 + 3.25 * e2 + 1.875 * e4 + 5.0 / 64.0 * e6) / (1.0 - e2).powf(6.5);
+                let o_e_val = (1.0 + 3.0 * e2 + 0.375 * e4) / (1.0 - e2).powf(4.5);
 
                 let d_a_pl = if norb_im > 0.0 {
-                    4.0 * aorb_im.powi(2) / (GCGS * m_prim * mass_moon)
-                        * k_p
-                        * (n_val * x_p * n_prim / norb_im - n_a)
+                    4.0 * aorb_im.powi(2) / grav * k_p * (n_val * x_p * n_prim / norb_im - n_a)
                 } else {
                     0.0
                 };
+
                 let d_a_moon = if norb_im > 0.0 {
-                    4.0 * aorb_im.powi(2) / (GCGS * m_prim * mass_moon)
+                    4.0 * aorb_im.powi(2) / grav
                         * k_m
                         * (n_val * x_m * world_states[world_idx].spin / norb_im - n_a)
                 } else {
@@ -507,14 +510,14 @@ impl IcyDwarfInput {
                 };
 
                 let d_e_pl = if norb_im > 0.0 {
-                    11.0 * aorb_im * eorb_im / (GCGS * m_prim * mass_moon)
+                    11.0 * aorb_im * eorb_im / grav
                         * k_p
                         * (o_e * x_p * n_prim / norb_im - 18.0 / 11.0 * n_e)
                 } else {
                     0.0
                 };
                 let d_e_moon = if norb_im > 0.0 {
-                    11.0 * aorb_im * eorb_im / (GCGS * m_prim * mass_moon)
+                    11.0 * aorb_im * eorb_im / grav
                         * k_m
                         * (o_e * x_m * world_states[world_idx].spin / norb_im - 18.0 / 11.0 * n_e)
                 } else {
@@ -620,7 +623,11 @@ impl IcyDwarfInput {
                 let name = &world_states[world_idx].name;
                 use std::fs::OpenOptions;
                 use std::io::Write;
-                let path = format!("Outputs/{}_{}_Orbit.csv", world_idx, name);
+                let path = {
+                    let mut path = PathBuf::from(&GLOBAL_ARGS.output_folder);
+                    path.push(format!("{}_{}_Orbit.csv", world_idx, name));
+                    path
+                };
                 let crash_msg = format!(
                     "Orbit: time={} Gyr, -dtime*d_aorb_moon (= {} m) + -dtime*d_aorb_pl (= {} m) + -dtime*d_aorb_ring (= {} m) > aorb = {} m, moon {} crashes into planet",
                     real_time / GYR2SEC,
@@ -749,17 +756,19 @@ impl IcyDwarfInput {
         for i in 0..nmoons {
             if resonance[i] > 0.0 && resonance[i] <= res_min {
                 res_min = resonance[i];
-            }
-            if resonance[i] == res_min {
                 nbres += 1;
                 res_acct_for[i] = resonance[i];
             }
+            // if resonance[i] == res_min {
+            //     nbres += 1;
+            //     res_acct_for[i] = resonance[i];
+            // }
         }
 
         // Zero out newer resonances if there are multiple of lowest order
         if nbres > 1 {
             for i in 0..nmoons {
-                if res_acct_for[i] > 0.0 && res_acct_for_old[i] == 0.0 {
+                if res_acct_for_old[i] == 0.0 && res_acct_for[i] > 0.0 {
                     res_acct_for[i] = 0.0;
                 }
             }
@@ -791,9 +800,7 @@ impl IcyDwarfInput {
         let pk = if r <= 3. {
             1.
         } else {
-            1. / (r - 2.).powf(2.4)
-                - 0.43 * (r / 3.).ln() / 10_f64.ln()
-                - 0.37 * ((-r + 3.).exp() - 1.)
+            1. / (r - 2.).powf(2.4) - 0.43 * (r / 3.).log10() - 0.37 * (3. - r).exp_m1()
         };
         pk.max(0.)
     }
