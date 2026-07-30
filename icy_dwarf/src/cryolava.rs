@@ -4,6 +4,7 @@ use crate::traits::float_traits::FloatExt;
 use crate::{consts::GRAM, input::IcyDwarfInput, thermal::ThermalOut};
 use extendr_api::prelude::*;
 use itertools::Itertools;
+use num::traits::Inv;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
@@ -167,7 +168,7 @@ impl IcyDwarfInput {
                 let d_int = crate::consts::RHO_H2OL * crate::consts::G / (r_m * r_m);
 
                 let dr_m = if i > 0 {
-                    (thermal_out[i][t].radius_km - thermal_out[i - 1][t].radius_km)
+                    thermal_out[i][t].radius_km - thermal_out[i - 1][t].radius_km
                 } else {
                     thermal_out[i][t].radius_km
                 } / 100.;
@@ -364,9 +365,9 @@ impl IcyDwarfInput {
             }
         }
 
-        write_output(&molalities, path, "Outputs/Cryolava_molalities.txt")?;
-        write_output(&partial_p, path, "Outputs/Cryolava_partialP.txt")?;
-        write_output(&x_vap_table, path, "Outputs/Cryolava_xvap.txt")?;
+        write_output(&molalities, path, "Cryolava_molalities.txt")?;
+        write_output(&partial_p, path, "Cryolava_partialP.txt")?;
+        write_output(&x_vap_table, path, "Cryolava_xvap.txt")?;
 
         let nr_f = nr as f64;
         println!(
@@ -386,8 +387,7 @@ impl IcyDwarfInput {
             println!(" No crust");
         }
 
-        let mut out_path = PathBuf::from(path);
-        out_path.push("Outputs");
+        let out_path = PathBuf::from(path);
         println!(
             "\nOutputs successfully generated in {:?} directory:",
             out_path
@@ -422,10 +422,7 @@ fn write_output(data: &[Vec<f64>], base_path: &str, relative_file: &str) -> Resu
         File::create(&path).map_err(|e| format!("Failed to create file {:?}: {:?}", path, e))?;
 
     for row in data {
-        let mut line = String::new();
-        for val in row {
-            line.push_str(&format!("{} \t", val));
-        }
+        let line = row.iter().map(|v| format!("{}", v)).join("\t");
         writeln!(file, "{}", line)
             .map_err(|e| format!("Failed to write to file {:?}: {:?}", path, e))?;
     }
@@ -434,44 +431,34 @@ fn write_output(data: &[Vec<f64>], base_path: &str, relative_file: &str) -> Resu
 }
 
 fn f(p: f64, mliq: f64, abundances: &[f64], k_rxn: &[f64], x: f64) -> f64 {
-    let mut f_x = p * mliq * k_rxn.iter().map(|&n| n + x).product::<f64>();
-    for (i, &abundance) in abundances.iter().enumerate() {
-        let lhs = k_rxn
-            .iter()
-            .enumerate()
-            .filter_map(|(j, &n)| if j != i { Some(n + x) } else { None })
-            .product::<f64>();
-        f_x -= abundance * lhs;
-    }
-    f_x
+    let prod = k_rxn.iter().map(|&k| k + x).product::<f64>();
+    let f_x = p * mliq * prod;
+
+    f_x - k_rxn
+        .iter()
+        .zip(abundances)
+        .map(|(&k, &abundance)| abundance * prod / (k + x))
+        .sum::<f64>()
 }
 
 fn f_prime(p: f64, mliq: f64, abundances: &[f64], k_rxn: &[f64], x: f64) -> Option<f64> {
     if abundances.len() != k_rxn.len() {
-        return None;
-    }
-    let mut f_prime_x = p * mliq;
-    let mut rhs = 0.0;
-    for i in 0..k_rxn.len() {
-        rhs += k_rxn
-            .iter()
-            .enumerate()
-            .filter_map(|(j, &n)| if j != i { Some(n + x) } else { None })
-            .product::<f64>();
-    }
+        None
+    } else {
+        let prod = k_rxn.iter().map(|&k| k + x).product::<f64>();
+        let sum_inv = k_rxn.iter().map(|&k| 1.0 / (k + x)).sum::<f64>();
 
-    f_prime_x *= rhs;
-    let mut lhs = 0.0;
-    for (i, abundance) in abundances.iter().enumerate() {
-        let mut lhs2 = 0.0;
-        for j in (0..k_rxn.len()).filter(|&j| j != i) {
-            lhs2 += k_rxn
-                .iter()
-                .enumerate()
-                .filter_map(|(u, &n)| if u != j && u != i { Some(n + x) } else { None })
-                .product::<f64>();
-        }
-        lhs += lhs2 * abundance;
+        let f_prime_x = p * mliq * prod * sum_inv;
+
+        let lhs = k_rxn
+            .iter()
+            .zip(abundances)
+            .map(|(&k, &abundance)| {
+                let inv_k = (k + x).inv();
+                abundance * prod * inv_k * (sum_inv - inv_k)
+            })
+            .sum::<f64>();
+
+        Some(f_prime_x - lhs)
     }
-    Some(f_prime_x - lhs)
 }

@@ -6,6 +6,11 @@ use std::{
     io::Write,
 };
 
+pub fn data_path(data_folder: &str, file_name: &str) -> PathBuf {
+    let mut res = PathBuf::from(data_folder);
+    res.push(file_name);
+    res
+}
 /// Helper function to write output matrix to a text file in a format readable by the main code.
 fn write_output(data: &[Vec<f64>], base_path: &str, relative_file: &str) -> Result<(), String> {
     let mut path = PathBuf::from(base_path);
@@ -35,7 +40,7 @@ fn write_output(data: &[Vec<f64>], base_path: &str, relative_file: &str) -> Resu
 /// as a function of flaw size `a_var`, and determine the optimal `a_var`
 /// that maximizes stress intensity `K_I` for various `deltaT` and `P`.
 /// Outputs `Crack_integral.txt` and `Crack_aTP.txt`.
-pub fn a_tp(path: &str, warnings: bool) -> Result<(), String> {
+pub fn a_tp(data_dir: &str, warnings: bool) -> Result<(), String> {
     let mut integral = vec![vec![0.0; 2]; INT_SIZE as usize];
 
     for (j, r) in integral.iter_mut().enumerate() {
@@ -47,15 +52,14 @@ pub fn a_tp(path: &str, warnings: bool) -> Result<(), String> {
         for i in 0..(INT_STEPS - 1) as usize {
             let x = a_var / INT_STEPS as f64 * (i + 1) as f64;
 
+            const LS_POW2_X4: f64 = 4. * L_SIZE * L_SIZE;
+
             // Calculate normal stress on grain boundary, eq (3) of Vance et al. (2007)
-            let term1 =
-                4.0 * L_SIZE * L_SIZE / (4.0 * L_SIZE * L_SIZE + (2.0 * L_SIZE - x).powi(2));
-            let term2 = 4.0 * L_SIZE * L_SIZE / (4.0 * L_SIZE * L_SIZE + x.powi(2));
+            let term1 = LS_POW2_X4 / (LS_POW2_X4 + (2.0 * L_SIZE - x).powi(2));
+            let term2 = LS_POW2_X4 / (LS_POW2_X4 + x.powi(2));
             let term3 = ((2.0 * L_SIZE - x) / x).ln();
-            let term4 = 0.5
-                * ((4.0 * L_SIZE * L_SIZE + (2.0 * L_SIZE - x).powi(2))
-                    / (4.0 * L_SIZE * L_SIZE + x.powi(2)))
-                .ln();
+            let term4 =
+                0.5 * ((LS_POW2_X4 + (2.0 * L_SIZE - x).powi(2)) / (LS_POW2_X4 + x.powi(2))).ln();
 
             let sigma_yy = term1 - term2 + term3 - term4;
             let d_int = sigma_yy * x.sqrt() / (a_var - x).sqrt();
@@ -93,13 +97,13 @@ pub fn a_tp(path: &str, warnings: bool) -> Result<(), String> {
         }
     }
 
-    write_output(&integral, path, "Data/Crack_integral.txt")?;
-    write_output(&a_tp_data, path, "Data/Crack_aTP.txt")?;
+    write_output(&integral, data_dir, "Crack_integral.txt")?;
+    write_output(&a_tp_data, data_dir, "Crack_aTP.txt")?;
 
     if warnings {
         println!(
             "\n Outputs successfully generated in {}/Data/ directory:",
-            path
+            data_dir
         );
         println!("1. Crack_integral.txt");
         println!("2. Crack_aTP.txt");
@@ -111,7 +115,7 @@ pub fn a_tp(path: &str, warnings: bool) -> Result<(), String> {
 /// Calculate the thermal expansivity (`alpha`) and compressibility (`beta`) of water
 /// over a range of T and P using CHNOSZ.
 /// Outputs `Crack_alpha.txt` and `Crack_beta.txt`.
-pub fn crack_water_chnosz(path: &str, warnings: bool) -> Result<(), String> {
+pub fn crack_water_chnosz(data_dir: &str, warnings: bool) -> Result<(), String> {
     let mut tempk = TEMPK_MIN;
     let mut p_bar = P_BAR_MIN;
 
@@ -157,13 +161,13 @@ pub fn crack_water_chnosz(path: &str, warnings: bool) -> Result<(), String> {
         tempk += DELTA_TEMPK;
     }
 
-    write_output(&alpha, path, "Data/Crack_alpha.txt")?;
-    write_output(&beta, path, "Data/Crack_beta.txt")?;
+    write_output(&alpha, data_dir, "Crack_alpha.txt")?;
+    write_output(&beta, data_dir, "Crack_beta.txt")?;
 
     if warnings {
         println!(
-            "\n Outputs successfully generated in {}/Data/ directory:",
-            path
+            "\n Outputs successfully generated in {} directory:",
+            data_dir
         );
         println!("1. Crack_alpha.txt");
         println!("2. Crack_beta.txt");
@@ -175,7 +179,7 @@ pub fn crack_water_chnosz(path: &str, warnings: bool) -> Result<(), String> {
 /// Calculate log K for the dissolution of amorphous silica, chrysotile, and magnesite
 /// over a range of T and P using CHNOSZ.
 /// Outputs `Crack_silica.txt`, `Crack_chrysotile.txt`, and `Crack_magnesite.txt`.
-pub fn crack_species_chnosz(path: &str, warnings: bool) -> Result<(), String> {
+pub fn crack_species_chnosz(data_dir: &str, warnings: bool) -> Result<(), String> {
     let mut tempk = TEMPK_MIN_SPECIES;
     let mut p_bar = P_BAR_MIN;
 
@@ -346,14 +350,14 @@ pub fn crack_species_chnosz(path: &str, warnings: bool) -> Result<(), String> {
         tempk += DELTA_TEMPK_SPECIES;
     }
 
-    write_output(&silica, path, "Data/Crack_silica.txt")?;
-    write_output(&chrysotile, path, "Data/Crack_chrysotile.txt")?;
-    write_output(&magnesite, path, "Data/Crack_magnesite.txt")?;
+    write_output(&silica, data_dir, "Crack_silica.txt")?;
+    write_output(&chrysotile, data_dir, "Crack_chrysotile.txt")?;
+    write_output(&magnesite, data_dir, "Crack_magnesite.txt")?;
 
     if warnings {
         println!(
-            "\n Outputs successfully generated in {}/Data/ directory:",
-            path
+            "\n Outputs successfully generated in {} directory:",
+            data_dir
         );
         println!("1. Crack_silica.txt");
         println!("2. Crack_chrysotile.txt");
@@ -374,10 +378,12 @@ mod crack_table_tests {
     #[test]
     fn test_a_tp() {
         // Passes
-        let test_dir = "./target/test_crack_data_a_tp";
+        let test_dir = "./target/test_crack_data_a_tp/";
         let _ = fs::remove_dir_all(test_dir);
 
-        let res = a_tp(test_dir, false);
+        let mut test_data_dir = test_dir.to_owned();
+        test_data_dir.push_str("Data/");
+        let res = a_tp(&test_data_dir, false);
         assert!(res.is_ok());
 
         assert!(Path::new(test_dir).join("Data/Crack_integral.txt").exists());

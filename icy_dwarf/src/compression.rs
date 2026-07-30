@@ -9,6 +9,7 @@ use itertools::Itertools;
 use num::traits::Inv;
 
 use crate::{
+    GLOBAL_ARGS,
     consts::{G, GRAM, KM, KM2CM, M_EARTH, MPA, R_EARTH},
     input::{Fracs, IcyDwarfInput},
     thermal::ThermalOut,
@@ -209,7 +210,7 @@ impl IcyDwarfInput {
         let rp_final = r[nr];
         let rhoavg = FRAC_3_4PI * rp_final.powi(3);
 
-        let output_dir = PathBuf::from("Outputs");
+        let output_dir = PathBuf::from(&GLOBAL_ARGS.output_folder);
         fs::create_dir_all(&output_dir).ok()?;
         let output_file = output_dir.join("Compression.txt");
         let mut fout = fs::File::create(&output_file).ok()?;
