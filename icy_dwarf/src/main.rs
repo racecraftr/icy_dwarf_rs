@@ -28,11 +28,12 @@ use num::complex::Complex64;
 use crate::{
     consts::{CM, GRAM, GYR2SEC, KM2CM, MYR2SEC},
     input::parse_toml,
+    water_rock::water_rock,
 };
 
 #[allow(dead_code)]
 #[derive(Parser)]
-struct Args {
+pub struct Args {
     /// The path to the IcyDwarf input.
     pub input_path: String,
 
@@ -44,10 +45,18 @@ struct Args {
     /// The path to the Data folder, in which inputs to subroutines will be read.
     /// By default, this will bes set to the Data folder in the current working directory.
     #[arg(short, long, value_name = "DATA FOLDER", default_value = "Data/")]
-    pub data_path: String,
+    pub data_folder: String,
 }
 
-pub static GLOBAL_ARGS: LazyLock<Args> = LazyLock::new(|| Args::parse());
+impl Args {
+    pub fn data_path(&self, file_name: &str) -> PathBuf {
+        let mut res = PathBuf::from(&self.data_folder);
+        res.push(file_name);
+        res
+    }
+}
+
+pub static GLOBAL_ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
 
 fn main() {
     println!(
@@ -107,10 +116,95 @@ For more information, visit https://ww.gnu.org/licenses.
     input.grid.time_step = (input.grid.time_total / input.grid.output_every).floor() + 1.;
 
     println!("{:?}", &input);
+
+    if input.subroutines.gen_crack_core {
+        println!(">> Calculating expansion mismatch optimal flaw size matrix...");
+        if let Err(s) =
+            crate::crack_table::a_tp(&GLOBAL_ARGS.data_folder, input.housekeeping.warnings)
+        {
+            eprintln!("ERROR: {}", s);
+            exit(1);
+        }
+    }
+
+    if input.subroutines.gen_water_ab {
+        println!(">> Calculating alpha(T,P) and beta(T,P) tables for water using CHNOSZ...");
+        if let Err(s) = crate::crack_table::crack_water_chnosz(
+            &GLOBAL_ARGS.data_folder,
+            input.housekeeping.warnings,
+        ) {
+            eprintln!("ERROR: {}", s);
+            exit(1);
+        }
+    }
+
+    if input.subroutines.gen_crack_sp {
+        println!(">> Calculating log K for crack species using CHNOSZ...");
+        if let Err(s) = crate::crack_table::crack_species_chnosz(
+            &GLOBAL_ARGS.data_folder,
+            input.housekeeping.warnings,
+        ) {
+            eprintln!("ERROR: {}", s);
+            exit(1);
+        }
+    }
+
     if input.subroutines.run_therm {
         println!(">> Running thermal evolution code...");
         input.planet_system(&GLOBAL_ARGS.output_folder);
     }
+
+    if input.subroutines.run_geo {
+        println!(">> Running PHREEQC across the specified range of parameters...");
+        // TODO: figure out where MoleMass.txt is, and how to implement the phreeqc functions.
+        let geo = &input.subroutines.geo;
+        let t_steps = if geo.temp.step > 0.0 {
+            ((geo.temp.max - geo.temp.min) / geo.temp.step).floor() as usize + 1
+        } else {
+            1
+        };
+        let p_steps = if geo.pressure.step > 0.0 {
+            ((geo.pressure.max - geo.pressure.min) / geo.pressure.step).floor() as usize + 1
+        } else {
+            1
+        };
+
+        let pe_min = 0.25 * geo.pe.min;
+        let pe_max = 0.25 * geo.pe.max;
+        let pe_step = 0.25 * geo.pe.step;
+        let pe_steps = if pe_step > 0.0 {
+            ((pe_max - pe_min) / pe_step).floor() as usize + 1
+        } else {
+            1
+        };
+
+        let wr_steps = if geo.wr_ratio.step > 1.0 {
+            ((geo.wr_ratio.max.ln() - geo.wr_ratio.min.ln()) / geo.wr_ratio.step.ln()).ceil()
+                as usize
+                + 1
+        } else {
+            1
+        };
+
+        for i_t in 0..t_steps {
+            let t = geo.temp.min + (i_t as f64) * geo.temp.step;
+            for i_p in 0..p_steps {
+                let p = geo.pressure.min + (i_p as f64) * geo.pressure.step;
+                for i_pe in 0..pe_steps {
+                    let pe = pe_min + (i_pe as f64) * pe_step;
+                    for i_wr in 0..wr_steps {
+                        let wr = geo.wr_ratio.min * geo.wr_ratio.step.powi(i_wr as i32);
+                        if let Err(s) = water_rock(&GLOBAL_ARGS.data_folder, t, p, pe, wr) {
+                            eprintln!("ERROR: {}", s);
+                            exit(1);
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(">> PHREEQC integration has not been fully supported just yet.")
+    }
+
     if input.subroutines.run_comp {
         println!(">> Running compression routine...");
         let Some(thermal_outputs) = input.read_thermal_out(&GLOBAL_ARGS.output_folder) else {
@@ -121,7 +215,7 @@ For more information, visit https://ww.gnu.org/licenses.
             exit(1);
         };
         if input
-            .compression(&GLOBAL_ARGS.data_path, &thermal_outputs)
+            .compression(&GLOBAL_ARGS.data_folder, &thermal_outputs)
             .is_none()
         {
             eprintln!("Could not calculate compression code");
