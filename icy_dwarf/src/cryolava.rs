@@ -1,4 +1,4 @@
-use crate::consts::{BAR, G, KM, KM2CM, RHO_ADHS, RHO_H2OL, RHO_H2OS, RHO_NH3L};
+use crate::consts::{BAR, G, KELVIN, KM, KM2CM, RHO_ADHS, RHO_H2OL, RHO_H2OS, RHO_NH3L};
 use crate::input::Fracs;
 use crate::traits::float_traits::FloatExt;
 use crate::{consts::GRAM, input::IcyDwarfInput, thermal::ThermalOut};
@@ -165,7 +165,7 @@ impl IcyDwarfInput {
             for i in r_seafloor_idx..abs_r {
                 let m_inf: f64 = (0..i).map(|u| thermal_out[u][t].mass_total()).sum();
                 let r_m = thermal_out[i][t].radius_km / 100.0;
-                let d_int = crate::consts::RHO_H2OL * crate::consts::G / (r_m * r_m);
+                let d_int = RHO_H2OL * G / (r_m * r_m);
 
                 let dr_m = if i > 0 {
                     thermal_out[i][t].radius_km - thermal_out[i - 1][t].radius_km
@@ -173,7 +173,7 @@ impl IcyDwarfInput {
                     thermal_out[i][t].radius_km
                 } / 100.;
 
-                p_integral += (d_int + d_int_prec) / 2.0 * m_inf * crate::consts::GRAM * dr_m;
+                p_integral += (d_int + d_int_prec) * 0.5 * m_inf * GRAM * dr_m;
                 d_int_prec = d_int;
             }
 
@@ -181,7 +181,7 @@ impl IcyDwarfInput {
 
             // Use CHNOSZ to get reaction constants at given T and P
             let p_local = pressure[abs_r];
-            let p_bar = p_local / crate::consts::BAR;
+            let p_bar = p_local / BAR;
 
             let mut chnosz_t = temp;
             if chnosz_t < min_temp_chnosz && warnings && r == 0 {
@@ -191,7 +191,7 @@ impl IcyDwarfInput {
                 );
             }
             chnosz_t.max_assign(min_temp_chnosz);
-            let temp_c = chnosz_t - crate::consts::KELVIN;
+            let temp_c = chnosz_t - KELVIN;
 
             for i in 0..N_SPECIES as usize {
                 let species_name = species[i];
@@ -317,7 +317,7 @@ impl IcyDwarfInput {
                 x_vap_table[r][1] = p_gas / crate::consts::BAR;
                 x_vap_table[r][2] = x_vap_val * crate::consts::RHO_H2OL * crate::consts::R_G * temp
                     / crate::consts::BAR;
-                x_vap_table[r][3] = crate::consts::RHO_H2OL / (1.0 + x_vap_table[r][2]);
+                x_vap_table[r][3] = RHO_H2OL / (1.0 + x_vap_table[r][2]);
 
                 let m_inf_stress = if r > 0 {
                     let limit = r_seafloor_idx + r - 1;
