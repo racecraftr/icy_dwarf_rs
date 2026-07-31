@@ -1,11 +1,9 @@
-use std::{
-    f64::consts::{FRAC_PI_2, PI},
-    fs,
-    process::exit,
-};
+//! This module solves 1D thermal evolution, tidal dissipation, and heat conduction equations for planetary bodies.
+
+use std::{f64::consts::FRAC_PI_2, fs, process::exit};
 
 use crate::{
-    FloatMat,
+    Args, FloatMat,
     consts::{
         CM, E_YOUNG_OLIV, E_YOUNG_SERP, GCGS, GRAM, KM, KM2CM, NU_POISSON_OLIV, NU_POISSON_SERP,
         PA2BA, PI_GREEK,
@@ -14,6 +12,7 @@ use crate::{
     input::{Fracs, IcyDwarfInput},
     planet_system::{RHO_ADHS_TH, RHO_H2OL_TH, RHO_H2OS_TH, RHO_NH3L_TH, WorldState, ZoneState},
     to_faer_mat,
+    traits::float_traits::FloatExt,
 };
 use faer::{Mat, linalg::solvers::DenseSolveCore, prelude::Solve};
 use itertools::Itertools;
@@ -24,9 +23,23 @@ use num::{
 };
 
 const K: f64 = 200.0e9 / GRAM * CM;
+const C0: Complex64 = Complex64::ZERO;
 
 impl IcyDwarfInput {
-    pub fn thermal(&self, world_states: &mut [WorldState], dtime: f64, real_time: f64, data_folder: &String) {
+    /// Execute 1D thermal evolution and heat transport calculations for all worlds.
+    ///
+    /// # Parameters
+    /// - `world_states`: The mutable array of world states for all moons.
+    /// - `dtime`: The duration of the time step in seconds.
+    /// - `real_time`: The current simulation time in seconds.
+    /// - `data_folder`: The folder path string containing data files.
+    pub fn thermal(
+        &self,
+        world_states: &mut [WorldState],
+        dtime: f64,
+        real_time: f64,
+        args: &Args,
+    ) {
         for world_state in world_states.iter_mut() {
             // 1. Calculate Pressure
             self.calculate_pressure(world_state);
@@ -36,7 +49,7 @@ impl IcyDwarfInput {
 
             // 3. Cracking
             for zone in world_state.zones.iter_mut() {
-                self.crack(zone, dtime, &read_data(data_folder).unwrap(), false);
+                self.crack(zone, dtime, &read_data(args).unwrap(), false);
             }
 
             // 4. Tidal heating (solid)
@@ -81,6 +94,9 @@ impl IcyDwarfInput {
             for (i, zone) in world_state.zones.iter().enumerate() {
                 qth[i] += zone.tide_heat_rate * 1.0e7;
             }
+
+            // Add fluid tidal heating to Qth (using tropf)
+            self.fluid_tide(world_state, &mut qth);
 
             // 6. Thermal Conductivity
             for zone in world_state.zones.iter_mut() {
@@ -139,18 +155,13 @@ impl IcyDwarfInput {
                 .iter()
                 .find(|w| w.name == world_state.name)
                 .map(|w| w.temp_surf)
-                .unwrap_or_else(|| {
-                    world_state
-                        .zones
-                        .last()
-                        .map(|z| z.temp)
-                        .unwrap_or(70.0)
-                });
+                .unwrap_or_else(|| world_state.zones.last().map(|z| z.temp).unwrap_or(70.0));
 
             if let Some(last_zone) = world_state.zones.last_mut() {
                 let e_rock = last_zone.mass_rock * crate::planet_system::heat_rock(temp_surf);
                 let e_h2os = last_zone.mass_ice * crate::consts::QH2O * temp_surf.powi(2) * 0.5;
-                let e_slush = last_zone.mass_ammonia_solid * crate::consts::QADH * temp_surf.powi(2) * 0.5;
+                let e_slush =
+                    last_zone.mass_ammonia_solid * crate::consts::QADH * temp_surf.powi(2) * 0.5;
                 last_zone.energy_total = e_rock + e_h2os + e_slush;
                 last_zone.temp = temp_surf;
             }
@@ -183,7 +194,7 @@ impl IcyDwarfInput {
     pub fn tide(&self, world_state: &mut WorldState) {
         const D_EPS: f64 = 2.22e-16;
         let base_vec = vec![0_f64; world_state.zones.len()];
-        let mut shearmod = vec![Complex64::ZERO; world_state.zones.len()];
+        let mut shearmod = vec![C0; world_state.zones.len()];
         let mut rho = base_vec.clone();
 
         const MU_RIGID_ICE: f64 = 4.0e9 / GRAM * CM;
@@ -250,7 +261,7 @@ impl IcyDwarfInput {
             // let cond = world_state.omega.abs() < 100. * D_EPS;
             let cond_i = |n: f64| {
                 if world_state.omega.abs() < 100. * D_EPS {
-                    Complex64::ZERO
+                    C0
                 } else {
                     Complex64::I * n
                 }
@@ -367,6 +378,127 @@ impl IcyDwarfInput {
             };
             world_state.w_tide_tot += w_tide;
             zone.tide_heat_rate = w_tide / 1.0e7;
+        }
+    }
+
+    pub fn fluid_tide(&self, world_state: &mut WorldState, qth: &mut [f64]) {
+        world_state.cesq = 0.0;
+        world_state.til_t = 0.0;
+        world_state.w_fluidtide_tot = 0.0;
+
+        let n_zones = world_state.zones.len();
+        if n_zones == 0 {
+            return;
+        }
+
+        // Find ircore: highest index zone containing rock
+        let mut ircore = 0;
+        for (ir, zone) in world_state.zones.iter().enumerate().rev() {
+            if zone.mass_rock > 0.0 {
+                ircore = ir;
+                break;
+            }
+        }
+
+        // Find ir_ocean: top of ocean (liquid water > 0 and mass_rock <= 0)
+        let mut ir_ocean = ircore;
+        for (ir, zone) in world_state.zones.iter().enumerate().rev() {
+            if zone.mass_water > 0.0 && zone.mass_rock <= 0.0 {
+                ir_ocean = ir;
+                break;
+            }
+        }
+
+        let m_prim = self.primary_world.mass;
+        let eorb = world_state.e_orb;
+        let obl = world_state.obl;
+
+        if m_prim > 0.0 && (eorb > 0.0 || obl > 0.0) && ir_ocean > ircore {
+            let ocean_mid = (ir_ocean + ircore) / 2;
+            let mut r_ocean = world_state.zones[ocean_mid].radius;
+            if r_ocean <= 0.0 {
+                r_ocean = f64::EPSILON;
+            }
+
+            let h_ocean = world_state.zones[ir_ocean].radius - world_state.zones[ircore].radius;
+
+            // Accumulated mass up to ocean_mid
+            let m_acc: f64 = world_state.zones[..=ocean_mid]
+                .iter()
+                .map(|z| z.mass_total)
+                .sum();
+
+            let g_ocean = GCGS * m_acc / (r_ocean * r_ocean);
+
+            let omega_tide = world_state.n_orb;
+            if omega_tide <= 0.0 {
+                return;
+            }
+
+            let cesq = (g_ocean * h_ocean) / (2.0 * omega_tide * r_ocean).powi(2);
+
+            let last_radius = world_state.zones.last().map(|z| z.radius).unwrap_or(1.0);
+            let til_t_scale = 1.0;
+            let ocean_top_r = world_state.zones[ir_ocean].radius;
+            let r_diff = last_radius - ocean_top_r;
+            let til_t = if r_diff.abs() > 1.0e-12 {
+                til_t_scale * last_radius / r_diff
+            } else {
+                0.0
+            };
+
+            world_state.cesq = cesq;
+            world_state.til_t = til_t;
+
+            let tilom = Complex64::new(0.5, 0.0);
+            let mut w_fluidtide = [0.0; 5];
+
+            if eorb > f64::EPSILON {
+                let p0 = self.tropf(cesq, til_t, tilom, 0, 0.5);
+                w_fluidtide[0] = p0.re;
+
+                let p1 = self.tropf(cesq, til_t, -tilom, 2, 3.0);
+                w_fluidtide[1] = p1.re;
+
+                let p2 = self.tropf(cesq, til_t, tilom, 2, 3.0);
+                w_fluidtide[2] = p2.re;
+            }
+
+            if obl > f64::EPSILON {
+                let p3 = self.tropf(cesq, til_t, -tilom, 1, 1.5);
+                w_fluidtide[3] = p3.re;
+
+                let p4 = self.tropf(cesq, til_t, tilom, 1, 1.5);
+                w_fluidtide[4] = p4.re;
+            }
+
+            let mut sum_w_fluidtide = (-1.5 * eorb * 0.5) * (-1.5 * eorb * 0.5) * w_fluidtide[0]
+                + (-1.0 / 8.0 * eorb * 3.0) * (-1.0 / 8.0 * eorb * 3.0) * w_fluidtide[1]
+                + (7.0 / 8.0 * eorb * 3.0) * (7.0 / 8.0 * eorb * 3.0) * w_fluidtide[2]
+                + (0.5 * obl * 1.5) * (0.5 * obl * 1.5) * w_fluidtide[3]
+                + (0.5 * obl * 1.5) * (0.5 * obl * 1.5) * w_fluidtide[4];
+
+            let a_orb = world_state.a_orb;
+            let factor = (GCGS * m_prim / a_orb / r_ocean)
+                * (last_radius / a_orb)
+                * (last_radius / a_orb)
+                * (r_ocean / last_radius)
+                * (r_ocean / last_radius);
+
+            sum_w_fluidtide = sum_w_fluidtide * RHO_H2OL_TH * factor.powi(2) / (2.0 * omega_tide);
+
+            let mut w_fluidtide_tot = 0.0;
+            for ir in ircore..ir_ocean {
+                let vol = world_state.zones[ir].volumes().0;
+                let heating = sum_w_fluidtide * vol;
+                if ir < qth.len() {
+                    qth[ir] += heating;
+                }
+                w_fluidtide_tot += heating;
+            }
+
+            world_state.w_fluidtide_tot = w_fluidtide_tot;
+            world_state.heat_fluidtide += w_fluidtide_tot;
         }
     }
 
@@ -564,31 +696,30 @@ impl ZoneState {
 }
 
 impl ZoneState {
+    /// Calculates the viscosity of a water-ammonia liquid depending on
+    /// temperature and ammonia mass fraction (Kargel et al. 1991).
+    /// The viscosity is returned in Pa s.
+    #[allow(dead_code)]
     pub fn viscosity(&self) -> f64 {
-        let x = self.mass_ammonia_liquid / self.mass_water;
-        let (a, b) = if self.temp > 240.0 {
-            [
-                (-10.8143, 1819.86),
-                (0.711062, 250.822),
-                (-22.4943, 6505.25),
-                (41.8343, 14923.4),
-                (18.5149, 7141.76),
-            ]
-        } else {
-            [
-                (-13.8628, 2701.73),
-                (-68.7617, 14973.3),
-                (230.038, -46174.5),
-                (-249.897, 45967.7),
-                (0., 0.),
-            ]
+        if self.temp <= 0.0 {
+            return 0.0;
         }
-        .iter()
-        .enumerate()
-        .fold((0., 0.), |(a, b), (k, (a_t, b_t))| {
-            let x_pow = x.powi(k as i32);
-            (a + a_t * x_pow, b + b_t * x_pow)
-        });
+        let x = if self.mass_water > 0.0 {
+            self.mass_ammonia_liquid / self.mass_water
+        } else {
+            0.0
+        };
+        let (a, b) = if self.temp > 240.0 {
+            let a_val = -10.8143 + 0.711062 * x - 22.4943 * x * x + 41.8343 * x.powi(3)
+                - 18.5149 * x.powi(4);
+            let b_val =
+                1819.86 + 250.822 * x + 6505.25 * x * x - 14923.4 * x.powi(3) + 7141.46 * x.powi(4);
+            (a_val, b_val)
+        } else {
+            let a_val = -13.8628 - 68.7617 * x + 230.083 * x * x - 249.897 * x.powi(3);
+            let b_val = 2701.73 + 14973.3 * x - 46174.5 * x * x + 45967.6 * x.powi(3);
+            (a_val, b_val)
+        };
         (a + b / self.temp).exp()
     }
 
@@ -655,9 +786,9 @@ fn creep(t: f64, p: f64, x_ice: f64, porosity: f64, x_hydr: f64) -> f64 {
         * D_FLOW_LAW.powf(-1.4);
 
     let eps_gbs = 5.5e7 * eff_p.powf(2.4) * (-60.0e3 / (R_G * t)).exp();
-    let eps_diff = 3.02e-14 * eff_p.powi(1) * D_FLOW_LAW.powi(-2) * (-59.4e3 / (R_G * t)).exp();
+    let eps_diff = 3.02e-14 * eff_p * D_FLOW_LAW.powi(-2) * (-59.4e3 / (R_G * t)).exp();
 
-    let creep_rate_ice = eps_diff + 1.0 / (1.0 / eps_basal + 1.0 / eps_gbs) + eps_disl;
+    let creep_rate_ice = eps_diff + (1.0 / eps_basal + 1.0 / eps_gbs).inv() + eps_disl;
 
     creep_rate_ice
         * if x_ice > 0.3 {
@@ -688,22 +819,22 @@ pub fn prop_mtx(
         return Vec::new();
     }
     if ir_core >= nr {
-        return vec![vec![Complex64::ZERO; 6]; nr];
+        return vec![vec![C0; 6]; nr];
     }
 
     assert!(r.len() >= nr);
     assert!(g.len() >= nr);
     assert!(shearmod.len() >= nr);
 
-    let mut ypropmtx = vec![[[Complex64::ZERO; 6]; 6]; nr];
-    let mut ypropinv = vec![[[Complex64::ZERO; 6]; 6]; nr];
-    let mut bpropmtx = vec![[[Complex64::ZERO; 3]; 6]; nr];
+    let mut ypropmtx = vec![[[C0; 6]; 6]; nr];
+    let mut ypropinv = vec![[[C0; 6]; 6]; nr];
+    let mut bpropmtx = vec![[[C0; 3]; 6]; nr];
 
     for ir in ir_core..nr {
         let r_val = r[ir + 1];
         let r_val_2 = r_val * r_val;
         let r_val_3 = r_val_2 * r_val;
-        let r_val_4 = r_val_3 * r_val;
+        let r_val_4 = r_val_2 * r_val_2;
         let r_val_5 = r_val_4 * r_val;
 
         let rho_g_r = Complex64::from(rho[ir] * g[ir] * r_val);
@@ -718,42 +849,42 @@ pub fn prop_mtx(
             [
                 Complex64::from(r_val_3 / 7.0),
                 Complex64::from(r_val),
-                Complex64::ZERO,
+                C0,
                 Complex64::from(1.0 / (2.0 * r_val_2)),
                 Complex64::from(1.0 / r_val_4),
-                Complex64::ZERO,
+                C0,
             ],
             [
-                Complex64::from(5.0 * r_val_3 / 42.0),
-                Complex64::from(r_val / 2.0),
-                Complex64::ZERO,
-                Complex64::ZERO,
+                5.0 * r_val_3 / 42.0.as_cplx(),
+                r_val * 0.5.as_cplx(),
+                C0,
+                C0,
                 Complex64::from(-1.0 / (3.0 * r_val_4)),
-                Complex64::ZERO,
+                C0,
             ],
             [
                 (rho_g_r - sm) * Complex64::from(r_val_2 / 7.0),
                 rho_g_r + sm * 2.0,
                 Complex64::from(-rho[ir] * r_val_2),
-                (rho_g_r - sm * 6.0) / Complex64::from(2.0 * r_val_3),
-                (rho_g_r - sm * 8.0) / Complex64::from(r_val_5),
-                Complex64::from(-rho[ir] / r_val_3),
+                (rho_g_r - sm * 6.0) / 2.0 * r_val_3,
+                (rho_g_r - sm * 8.0) / r_val_5,
+                -rho[ir] / r_val_3.as_cplx(),
             ],
             [
-                sm * Complex64::from(8.0 * r_val_2 / 21.0),
+                sm * 8.0 * r_val_2 / 21.0,
                 sm,
-                Complex64::ZERO,
-                sm / Complex64::from(2.0 * r_val_3),
-                sm * Complex64::from(8.0 / (3.0 * r_val_5)),
-                Complex64::ZERO,
+                C0,
+                sm / (2.0 * r_val_3),
+                sm * 8.0 / (3.0 * r_val_5),
+                C0,
             ],
             [
-                Complex64::ZERO,
-                Complex64::ZERO,
+                C0,
+                C0,
                 Complex64::from(-r_val_2),
-                Complex64::ZERO,
-                Complex64::ZERO,
-                Complex64::from(-1.0 / r_val_3),
+                C0,
+                C0,
+                Complex64::from(-r_val_3.inv()),
             ],
             [
                 four_pi_g_rho * Complex64::from(r_val_3 / 7.0),
@@ -761,7 +892,7 @@ pub fn prop_mtx(
                 Complex64::from(-5.0 * r_val),
                 two_pi_g_rho / Complex64::from(r_val_2),
                 four_pi_g_rho / Complex64::from(r_val_4),
-                Complex64::ZERO,
+                C0,
             ],
         ];
 
@@ -772,47 +903,40 @@ pub fn prop_mtx(
                 -r_over_sm,
                 r_over_sm * 2.0,
                 Complex64::from(rho[ir]) * r_over_sm,
-                Complex64::ZERO,
+                C0,
             ],
             [
                 -rho_g_r_over_sm + 6.0,
                 Complex64::from(-6.0),
                 r_over_sm,
-                Complex64::ZERO,
+                C0,
                 -Complex64::from(rho[ir]) * r_over_sm,
-                Complex64::ZERO,
+                C0,
             ],
-            [
-                four_pi_g_rho,
-                Complex64::ZERO,
-                Complex64::ZERO,
-                Complex64::ZERO,
-                Complex64::ZERO,
-                Complex64::from(-1.0),
-            ],
+            [four_pi_g_rho, C0, C0, C0, C0, Complex64::from(-1.0)],
             [
                 rho_g_r_over_sm + 2.0,
                 Complex64::from(6.0),
                 -r_over_sm,
                 r_over_sm * -3.0,
                 Complex64::from(rho[ir]) * r_over_sm,
-                Complex64::ZERO,
+                C0,
             ],
             [
                 -rho_g_r_over_sm + 1.0,
-                Complex64::from(-16.0),
+                -16.0.as_cplx(),
                 r_over_sm,
                 r_over_sm * 5.0,
-                -Complex64::from(rho[ir]) * r_over_sm,
-                Complex64::ZERO,
+                -rho[ir] * r_over_sm,
+                C0,
             ],
             [
-                four_pi_g_rho * Complex64::from(r_val),
-                Complex64::ZERO,
-                Complex64::ZERO,
-                Complex64::ZERO,
-                Complex64::from(5.0),
-                Complex64::from(-r_val),
+                four_pi_g_rho * r_val,
+                C0,
+                C0,
+                C0,
+                5.0.as_cplx(),
+                -r_val.as_cplx(),
             ],
         ];
 
@@ -831,10 +955,10 @@ pub fn prop_mtx(
     bpropmtx[ir_core][5][2] = Complex64::from(1.0);
 
     for ir in (ir_core + 1)..nr {
-        let mut btemp = [[Complex64::ZERO; 3]; 6];
+        let mut btemp = [[C0; 3]; 6];
         for i in 0..6 {
             for j in 0..3 {
-                let mut sum = Complex64::ZERO;
+                let mut sum = C0;
                 for k in 0..6 {
                     sum += ypropinv[ir - 1][i][k] * bpropmtx[ir - 1][k][j];
                 }
@@ -843,7 +967,7 @@ pub fn prop_mtx(
         }
         for i in 0..6 {
             for j in 0..3 {
-                let mut sum = Complex64::ZERO;
+                let mut sum = C0;
                 for k in 0..6 {
                     sum += ypropmtx[ir][i][k] * btemp[k][j];
                 }
@@ -856,18 +980,14 @@ pub fn prop_mtx(
         .iter()
         .map(|&idx| bpropmtx[nr - 1][idx][0..=2].to_vec())
         .collect::<Vec<_>>();
-    let bsurf = vec![
-        Complex64::ZERO,
-        Complex64::ZERO,
-        Complex64::from(-5.0 / r[nr - 1]),
-    ];
+    let bsurf = vec![C0, C0, Complex64::from(-5.0 / r[nr - 1])];
 
-    let mut ytide = vec![vec![Complex64::ZERO; 6]; nr];
+    let mut ytide = vec![vec![C0; 6]; nr];
 
     if let Some((x, _)) = gauss_jordan(&mbc, &bsurf) {
         for ir in 0..nr {
             for i in 0..6 {
-                let mut sum = Complex64::ZERO;
+                let mut sum = C0;
                 for j in 0..3 {
                     sum += bpropmtx[ir][i][j] * x[(j, 0)];
                 }
@@ -884,6 +1004,7 @@ pub fn prop_mtx(
 
 /// Calculates the single value decomposition of a mxn matrix.
 /// Retunrs, in order: U, Sigma, V^*.
+#[allow(dead_code)]
 fn svd(mat: &[Vec<f64>]) -> Option<(FloatMat, FloatMat, FloatMat)> {
     let rows = mat.len();
     let cols = mat[0].len();
@@ -921,27 +1042,47 @@ fn gauss_jordan(
     Some((x, a_inv))
 }
 
+/// This struct stores a snapshot of radial zone state loaded from output CSV files.
 #[derive(Clone, Debug, Default)]
 pub struct ThermalOut {
+    /// Zone radius in centimeters.
     pub radius_km: f64,
+    /// Temperature in Kelvin.
     pub temp_kelvin: f64,
+    /// Rock mass in grams.
     pub mass_rock: f64,
+    /// Water ice mass in grams.
     pub mass_ice: f64,
+    /// Solid ammonia dihydrate mass in grams.
     pub mass_ammonia_solid: f64,
+    /// Liquid water mass in grams.
     pub mass_water: f64,
+    /// Liquid ammonia solution mass in grams.
     pub mass_ammonia_liquid: f64,
+    /// Nusselt convection number.
     pub nusselt_num: f64,
+    /// Amorphous ice fraction.
     pub ice_frac_amorphous: f64,
+    /// Thermal conductivity.
     pub thermal_cond: f64,
+    /// Degree of rock hydration.
     pub deg_of_hydr: f64,
+    /// Matrix porosity fraction.
     pub porosity: f64,
+    /// Core cracking flag.
     pub crack: bool,
+    /// Tidal heating power rate in erg per second.
     pub tidal_heating_rate: f64,
 }
 
-type ThermVol = (f64, (f64, f64, f64, f64, f64));
-
 impl ThermalOut {
+    /// Parse a line of output text into a [`ThermalOut`] struct.
+    ///
+    /// # Parameters
+    /// - `ln`: The line string to parse.
+    ///
+    /// # Returns
+    /// An optional [`ThermalOut`] struct containing the parsed fields.
     pub fn from_line(ln: &str) -> Option<Self> {
         let parts = ln.split_whitespace().collect::<Vec<_>>();
         let radius_km = parts[0].parse::<f64>().ok()?;
@@ -964,6 +1105,10 @@ impl ThermalOut {
         })
     }
 
+    /// Calculate total zone mass in grams.
+    ///
+    /// # Returns
+    /// The total mass sum.
     pub fn mass_total(&self) -> f64 {
         self.mass_rock
             + self.mass_ice
@@ -972,6 +1117,13 @@ impl ThermalOut {
             + self.mass_water
     }
 
+    /// Calculate total zone volume and phase volumes.
+    ///
+    /// # Parameters
+    /// - `input`: The [`IcyDwarfInput`] configuration reference.
+    ///
+    /// # Returns
+    /// A tuple containing total volume and a [`Fracs`] struct of phase volumes.
     pub fn vol(&self, input: &IcyDwarfInput) -> (f64, Fracs) {
         let vol_rock = self.mass_rock
             / (self.deg_of_hydr * input.world_spec.rho_hydr_th()
@@ -986,6 +1138,10 @@ impl ThermalOut {
         )
     }
 
+    /// Calculate phase mass fractions for the output zone.
+    ///
+    /// # Returns
+    /// A [`Fracs`] struct containing phase mass fractions.
     pub fn fracs(&self) -> Fracs {
         let mass_total = self.mass_total();
         Fracs(
@@ -1042,5 +1198,17 @@ mod test {
                 assert!((v_ortho[(i, j)] - expected).abs() < 1e-10);
             }
         }
+    }
+
+    #[test]
+    fn test_viscosity() {
+        let zone = ZoneState {
+            temp: 273.15,
+            mass_water: 1000.0,
+            mass_ammonia_liquid: 100.0,
+            ..Default::default()
+        };
+        let visc = zone.viscosity();
+        assert!(visc > 0.0 && visc.is_finite());
     }
 }
