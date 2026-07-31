@@ -1,3 +1,5 @@
+//! This module implements ocean fluid tidal dissipation models using spherical harmonics and sparse complex matrices.
+
 use std::array;
 
 use faer::{
@@ -10,16 +12,13 @@ use faer::{
     },
     traits::ComplexField,
 };
-use itertools::{Itertools, multizip};
+use itertools::multizip;
 use num::{
     complex::{Complex64, ComplexFloat},
     traits::Inv,
 };
 
-use crate::{
-    input::IcyDwarfInput,
-    traits::{float_traits::FloatExt, num_ext::NumExt},
-};
+use crate::{input::IcyDwarfInput, traits::num_ext::NumExt};
 type C = Complex64;
 
 const C0: Complex64 = Complex64::ZERO;
@@ -29,15 +28,17 @@ const SH_TERMS: usize = 500;
 const BASE_ARR: [Complex64; SH_TERMS] = [Complex64::ZERO; SH_TERMS];
 
 impl IcyDwarfInput {
-    /// Port of the Tropf function from MatLab to Rust.
-    /// Why? Well, MatLab ain't free...
-    /// Combines the TROPF and tropf functions from the original C code. Makes some optimizations to get
-    /// rid of unused variables.
-    // Since pointers are not neede in rust to return multiple values,
-    // It becomes easier to find which values are and are not being used.
-    // If we go through the original IcyDwarf code,
-    // We see that these values are assigned to in function parameters via pointers,
-    // but are never actually used in the main function. Thus we can discard them.
+    /// Calculate fluid tidal dissipation for a global ocean using spherical harmonics.
+    ///
+    /// # Parameters
+    /// - `til_cesq`: The equivalent speed of gravity waves squared.
+    /// - `til_t`: The fluid tidal dissipation time factor.
+    /// - `tilom`: The complex frequency parameter.
+    /// - `s`: The spherical harmonic order integer index.
+    /// - `pn_fsf_amp`: The amplitude coefficient factor.
+    ///
+    /// # Returns
+    /// The complex fluid tidal dissipation result.
     pub fn tropf(
         &self,
         til_cesq: f64,
@@ -45,8 +46,8 @@ impl IcyDwarfInput {
         tilom: Complex64,
         s: usize,
         pn_fsf_amp: f64,
-    ) -> (Complex64, Complex64, Complex64) {
-        let diss_type = DissType::KinPE; // note that this is always true.
+    ) -> Complex64 {
+        let _diss_type = DissType::KinPE; // note that this is always true.
         let nf = 2_usize;
         let til_om = 1_f64;
 
@@ -232,7 +233,7 @@ impl IcyDwarfInput {
         let nk_fsf = pns[nf - s] / tidal_pot_shc[nf - s];
         let k_loven_f = phi_rns[nf - s];
 
-        (p_fluidtide, nk_fsf, k_loven_f)
+        p_fluidtide
     }
 }
 
@@ -255,10 +256,15 @@ where
     SparseColMat::try_new_from_triplets(N, N, &triplets).unwrap()
 }
 
+/// This enum specifies the dissipation calculation type for ocean fluid tidal models.
 #[repr(u8)]
+#[allow(dead_code)]
 pub enum DissType {
+    /// Kinetic energy dissipation.
     Kinetic,
+    /// Potential energy dissipation.
     PE,
+    /// Combined kinetic and potential energy dissipation.
     KinPE,
 }
 
@@ -272,8 +278,9 @@ fn solve(mat: &SparseColMat<usize, Complex64>, b: &Col<Complex64>) -> Col<Comple
     lu.solve(&b)
 }
 
-/// uses the [`saer`] library to perform the Bi-conjugate Gradient Stabilized
+/// Uses the `faer` library to perform the Bi-conjugate Gradient Stabilized
 /// method on a matrix to solve the equation Ax = b.
+#[allow(dead_code)]
 fn bicgstab(a: &[Vec<Complex64>], b: &[Complex64]) -> Vec<Complex64> {
     let rows = a.len();
     let cols = a[0].len();
@@ -301,14 +308,13 @@ fn bicgstab(a: &[Vec<Complex64>], b: &[Complex64]) -> Vec<Complex64> {
 }
 
 /// Finds the complex eigenvalues of a real matrix.
-// This function is also unused.
-// Perhaps some other time...
+#[allow(dead_code)]
 fn eigen(mtx: &[Vec<f64>]) -> Option<Vec<Complex64>> {
     let rows = mtx.len();
     let cols = mtx[0].len();
 
     let mat = Mat::from_fn(rows, cols, |i, j| mtx[i][j]);
-    mat.eigenvalues().ok() // that's it, really
+    mat.eigenvalues().ok()
 }
 
 fn globe_time_average(s_coefs: &[C], t_coefs: &[C], s: usize, n_vec: &[usize]) -> Vec<f64> {
@@ -357,7 +363,6 @@ mod eigen_tests {
 
     #[test]
     fn eigen_test_3() {
-        // Block diagonal matrix with complex eigenvalues 1 +/- i and 2 +/- 3i
         let complex_mtx = vec![
             vec![1.0, -1.0, 0.0, 0.0],
             vec![1.0, 1.0, 0.0, 0.0],
@@ -367,7 +372,6 @@ mod eigen_tests {
         let Some(mut eigenvalues) = eigen(&complex_mtx) else {
             panic!("Unable to find eigenvalues of matrix");
         };
-        // Sort by real part then imaginary part to ensure a deterministic order
         eigenvalues.sort_by(|a, b| a.re.total_cmp(&b.re).then(a.im.total_cmp(&b.im)));
         println!("eigenvalues are {:?}", &eigenvalues);
         let targets = [
@@ -377,7 +381,6 @@ mod eigen_tests {
             C::new(2.0, 3.0),
         ];
 
-        // check mismatch by a small amount
         for (a, b) in eigenvalues.iter().zip(targets.iter()) {
             assert!(
                 (a.re - b.re).abs() < 1e-12,
@@ -422,11 +425,8 @@ mod ratio_factorials_tests {
 
     #[test]
     fn test_ratio_factorials() {
-        // (2+2)! / (2-2)! = 24 / 1 = 24
         assert_eq!(ratio_factorials(2, 2), 24.0);
-        // (3+1)! / (3-1)! = 24 / 2 = 12
         assert_eq!(ratio_factorials(3, 1), 12.0);
-        // (3+2)! / (3-2)! = 120 / 1 = 120
         assert_eq!(ratio_factorials(3, 2), 120.0);
     }
 }
@@ -439,16 +439,10 @@ mod globe_time_average_tests {
     fn test_globe_time_average() {
         let s_coefs = [C::new(1.0, 1.0)];
         let t_coefs = [C::new(2.0, -1.0)];
-        // sc = 1 + i, tc = 2 - i
-        // sc_c = 1 - i, tc_c = 2 + i
-        // sc * tc_c = (1 + i)(2 + i) = 2 + i + 2i - 1 = 1 + 3i
-        // sc_c * tc = (1 - i)(2 - i) = 2 - i - 2i - 1 = 1 - 3i
-        // sc * tc_c + sc_c * tc = 2.0 (real part)
-        // For n = 2, s = 2:
-        // (2.0) / (2 * 2 + 1) * ratio_factorials(2, 2)
-        // = 2.0 / 5.0 * 24.0 = 9.6
         let res = globe_time_average(&s_coefs, &t_coefs, 2, &[2]);
         assert_eq!(res.len(), 1);
         assert!((res[0] - 9.6).abs() < 1e-12);
     }
 }
+
+

@@ -1,3 +1,5 @@
+//! This module defines interior zone states, planetary world structures, and main simulation progression functions.
+
 use std::f64::consts::{FRAC_PI_3, PI};
 
 use itertools::Itertools;
@@ -10,53 +12,80 @@ use crate::{
     traits::float_traits::FloatExt,
 };
 
-// pub fn planet_system(parsed: &ParsedInput) {
-//     let base_mtx = vec![vec![0; parsed.grid.n_zones]; parsed.worlds.len()];
-//     let base_vec = vec![0; parsed.worlds.len()];
-// }
-
 const TODAY: f64 = 4568.2 * MYR2SEC;
 
+/// The density of water ice in grams per cubic centimeter converted to mass units.
 pub const RHO_H2OS_TH: f64 = RHO_H2OS * GRAM;
+/// The density of liquid water in grams per cubic centimeter converted to mass units.
 pub const RHO_H2OL_TH: f64 = RHO_H2OS_TH;
+/// The density of solid ammonia dihydrate converted to mass units.
 pub const RHO_ADHS_TH: f64 = RHO_ADHS * GRAM;
+/// The density of liquid ammonia solution converted to mass units.
 pub const RHO_NH3L_TH: f64 = XC / (1.0 / RHO_H2OL_TH) + (1.0 / RHO_ADHS_TH - 1.0 / RHO_H2OS_TH);
 
 /// Represents the state of a radial layer of an [`IcyWorld`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ZoneState {
-    /// Inner radius of shell.
+    /// Inner radius of shell in centimeters.
     pub radius: f64,
 
-    /// Radial distance from inner radius to outer radius.
+    /// Radial distance from inner radius to outer radius in centimeters.
     pub dr: f64,
+    /// Temperature of the zone in Kelvin.
     pub temp: f64,
+    /// Temperature of the zone at previous step in Kelvin.
     pub temp_old: f64,
-    pub mass_total: f64, // usually d_m in most cases
+    /// Total mass of the zone in grams.
+    pub mass_total: f64,
+    /// Mass of rock in the zone in grams.
     pub mass_rock: f64,
+    /// Initial mass of rock in the zone in grams.
     pub mass_rock_init: f64,
+    /// Mass of water ice in the zone in grams.
     pub mass_ice: f64,
+    /// Mass of solid ammonia dihydrate in grams.
     pub mass_ammonia_solid: f64,
+    /// Mass of liquid water in grams.
     pub mass_water: f64,
+    /// Mass of liquid ammonia solution in grams.
     pub mass_ammonia_liquid: f64,
+    /// Total thermal energy in erg units.
     pub energy_total: f64,
+    /// Matrix porosity fraction.
     pub porosity: f64,
+    /// Hydrostatic pressure in pascals.
     pub pressure: f64,
+    /// Rock hydration fraction.
     pub x_hydr: f64,
+    /// Previous rock hydration fraction.
     pub x_hydr_old: f64,
+    /// Thermal conductivity.
     pub kappa: f64,
+    /// Nusselt convection number.
     pub nusselt: f64,
+    /// Crack state identifier code.
     pub crack: f64,
+    /// Crack radius in meters.
     pub crack_size: f64,
+    /// Pore fluid pressure in pascals.
     pub p_pore: f64,
+    /// Hydration stress in pascals.
     pub p_hydr: f64,
+    /// Chemical activity quotients array.
     pub act: [f64; 3],
+    /// Stress components tensor array.
     pub stress: [f64; 12],
+    /// Open fracture volume fraction.
     pub frac_open: f64,
+    /// Tidal heating power rate in erg per second.
     pub tide_heat_rate: f64,
 }
 
 impl ZoneState {
+    /// Calculate the total radial volume and phase volumes of the zone.
+    ///
+    /// # Returns
+    /// A tuple containing total volume and a [`Fracs`] struct of phase volumes.
     pub fn volumes(&self) -> (f64, Fracs) {
         // Volume = outer vol - inner vol
         //        = pi (r + dr)^2 - pi r^2
@@ -77,6 +106,10 @@ impl ZoneState {
         )
     }
 
+    /// Calculate mass fractions for all material phases in the zone.
+    ///
+    /// # Returns
+    /// A [`Fracs`] struct containing phase mass fractions.
     pub fn fracs(&self) -> Fracs {
         Fracs(
             self.mass_rock / self.mass_total,
@@ -87,6 +120,13 @@ impl ZoneState {
         )
     }
 
+    /// Calculate total internal thermal energy of the zone.
+    ///
+    /// # Parameters
+    /// - `t_init`: The reference initial temperature in Kelvin.
+    ///
+    /// # Returns
+    /// A tuple containing total energy and component energies for rock, ice, and slush.
     pub fn internal_energy(&self, t_init: f64) -> (f64, (f64, f64, f64)) {
         let n = t_init.powi(2) * 0.5;
         let energy_rock = self.mass_rock * heat_rock(t_init);
@@ -96,11 +136,18 @@ impl ZoneState {
         (sum, (energy_rock, energy_ice, energy_slush))
     }
 
+    /// Calculate brittle strength of the rock matrix in the zone.
+    ///
+    /// # Returns
+    /// The brittle strength value in pascals.
     pub fn brittle_strength(&self) -> f64 {
         crack::strain(self.pressure, self.x_hydr, self.temp, self.porosity).0
     }
 
-    /// Recalculates `temp` and phase distributions based on the current `energy_total`
+    /// Recalculate zone temperature and phase state from total internal energy.
+    ///
+    /// # Parameters
+    /// - `x_salt`: The salinity mass fraction parameter.
     pub fn apply_state(&mut self, x_salt: f64) -> Result<(), String> {
         let specific_energy = self.energy_total / self.mass_total;
         let Fracs(frock, mut fh2os, mut fadhs, mut fh2ol, mut fnh3l) = self.fracs();
@@ -177,45 +224,85 @@ impl ZoneState {
 /// Represents the state of an [`IcyWorld`].
 #[derive(Clone, Debug)]
 pub struct WorldState {
+    /// The name of the satellite world.
     pub name: String,
+    /// Semi-major axis of the orbit in centimeters.
     pub a_orb: f64,
+    /// Orbital eccentricity.
     pub e_orb: f64,
+    /// Orbital inclination in degrees.
     pub i_orb: f64,
+    /// Obliquity in degrees.
     pub obl: f64,
+    /// Mean motion orbital frequency in radians per second.
     pub n_orb: f64,
+    /// Mean longitude in radians.
     pub lambda: f64,
+    /// Longitude of pericenter in radians.
     pub omega: f64,
+    /// Rotation rate in radians per second.
     pub spin: f64,
+    /// Second Love number of the body.
     pub k2: f64,
+    /// Tidal dissipation factor Q.
     pub q_tide: f64,
+    /// Dimensionless moment of inertia coefficient.
     pub moi: f64,
+    /// Vector of radial zone states in the body.
     pub zones: Vec<ZoneState>,
+    /// Active accounted orbital resonances vector.
     pub res_acct_for: Vec<f64>,
+    /// Previous step first Poincaré variable.
     pub h_old: f64,
+    /// Previous step second Poincaré variable.
     pub k_old: f64,
+    /// Previous step semi-major axis in centimeters.
     pub a_old: f64,
+    /// Previous step secular eccentricity coefficient.
     pub cs_ee_old: f64,
+    /// Previous step mutual eccentricity coefficient.
     pub cs_eep_old: f64,
+    /// Previous step resonant inner eccentricity coefficient.
     pub cr_e_old: f64,
+    /// Previous step resonant outer eccentricity coefficient.
     pub cr_ep_old: f64,
+    /// Previous step resonant squared inner eccentricity coefficient.
     pub cr_ee_old: f64,
+    /// Previous step resonant product eccentricity coefficient.
     pub cr_eep_old: f64,
+    /// Previous step resonant squared outer eccentricity coefficient.
     pub cr_epep_old: f64,
+    /// Cumulative solid body tidal work in erg units.
     pub w_tide_tot: f64,
+    /// Cumulative ocean fluid tidal work in erg units.
     pub w_fluidtide_tot: f64,
+    /// Radiogenic heating rate in erg per second.
     pub heat_radio: f64,
+    /// Gravitational differentiation heating rate in erg per second.
     pub heat_grav: f64,
+    /// Serpentinization reaction heating rate in erg per second.
     pub heat_serp: f64,
+    /// Dehydration endothermic heat absorption rate in erg per second.
     pub heat_dehydr: f64,
+    /// Solid body tidal heating rate in erg per second.
     pub heat_tide: f64,
+    /// Fluid ocean tidal heating rate in erg per second.
     pub heat_fluidtide: f64,
+    /// Equivalent gravity wave speed squared.
     pub cesq: f64,
+    /// Fluid tidal dissipation time factor.
     pub til_t: f64,
+    /// Total cracked rock mass in grams.
     pub m_cracked_rock: f64,
+    /// Total liquid water mass in grams.
     pub m_liq: f64,
 }
 
 impl IcyDwarfInput {
+    /// Execute the main simulation loop across all satellites over time.
+    ///
+    /// # Parameters
+    /// - `output_path`: The file system directory path string for output files.
     pub fn planet_system(&self, output_path: &String) {
         let dtime = self.grid.time_step * 1.0e-6 * MYR2SEC;
         let n_time = (self.grid.time_total / self.grid.time_step) as usize;
@@ -433,12 +520,7 @@ impl IcyDwarfInput {
             }
 
             // Call Thermal logic
-            self.thermal(
-                &mut world_states,
-                dtime,
-                real_time,
-                &GLOBAL_ARGS.data_folder,
-            );
+            self.thermal(&mut world_states, dtime, real_time, &GLOBAL_ARGS);
 
             isteps += 1;
 
@@ -481,17 +563,20 @@ impl IcyDwarfInput {
                             &orbit_output,
                         );
                     }
-
-                    let mut rebound_output = vec![0.0; nmoons * 7];
-                    for (im, world) in world_states.iter().enumerate() {
-                        rebound_output[im * 7] = world.a_orb / KM2CM;
-                        rebound_output[im * 7 + 1] = world.e_orb;
-                        rebound_output[im * 7 + 2] = world.i_orb;
-                        rebound_output[im * 7 + 3] = world.zones.last().unwrap().radius / KM2CM;
-                        rebound_output[im * 7 + 4] = world.k2;
-                        rebound_output[im * 7 + 5] = world.moi;
-                        rebound_output[im * 7 + 6] = world.q_tide;
-                    }
+                    let rebound_output = world_states
+                        .iter()
+                        .flat_map(|w| {
+                            [
+                                w.a_orb / KM2CM,
+                                w.e_orb,
+                                w.i_orb,
+                                w.zones.last().unwrap().radius / KM2CM,
+                                w.k2,
+                                w.moi,
+                                w.q_tide,
+                            ]
+                        })
+                        .collect_vec();
                     let _ = append_output(output_path, "icydwarf_outputs_1.txt", &rebound_output);
                 }
 
@@ -646,6 +731,13 @@ impl TidalQ {
     }
 }
 
+/// Calculate specific enthalpy of rock in erg per gram at a given temperature.
+///
+/// # Parameters
+/// - `t`: The temperature in Kelvin.
+///
+/// # Returns
+/// The specific enthalpy value of rock.
 pub fn heat_rock(t: f64) -> f64 {
     if t > 1000.0 {
         EROCK_A * 275.0 * 275.0
@@ -658,6 +750,15 @@ pub fn heat_rock(t: f64) -> f64 {
     }
 }
 
+/// Calculate specific enthalpy and phase mass fractions for ice mixtures.
+///
+/// # Parameters
+/// - `t`: The temperature in Kelvin.
+/// - `x`: The ammonia mass fraction.
+/// - `x_salt`: The salinity mass fraction.
+///
+/// # Returns
+/// An array containing specific enthalpy and phase mass fractions for water ice, ammonia ice, liquid water, and liquid ammonia.
 pub fn heat_ice(t: f64, x: f64, x_salt: f64) -> [f64; 5] {
     let xb = XC * (2.0 / 95.0_f64).sqrt();
 

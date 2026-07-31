@@ -1,3 +1,5 @@
+//! This module provides recovery features to resume simulation states from output files.
+
 use crate::{
     consts::*,
     input::{Fracs, IcyDwarfInput},
@@ -8,18 +10,30 @@ use crate::{
 use std::fs;
 use std::path::Path;
 
+/// This struct stores orbital parameters read from an output file.
 #[derive(Default, Debug)]
 pub struct OrbitOut {
+    /// The simulation time in gigayears.
     pub time: f64,
+    /// The current semi-major axis in kilometers.
     pub a_orb: f64,
+    /// The previous semi-major axis in kilometers.
     pub a_old: f64,
+    /// The orbital eccentricity.
     pub e_orb: f64,
+    /// The first Poincaré orbital variable.
     pub h_old: f64,
+    /// The second Poincaré orbital variable.
     pub k_old: f64,
+    /// The total tidal work in gigajoules.
     pub w_tide_tot: f64,
 }
 
 impl OrbitOut {
+    /// Parse a line of text from an orbital output file into an [`OrbitOut`] struct.
+    ///
+    /// # Parameters
+    /// - `line`: The line of text to parse.
     pub fn from_line(line: &str) -> Option<Self> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 8 {
@@ -37,15 +51,24 @@ impl OrbitOut {
     }
 }
 
+/// This struct stores core cracking stress parameters read from an output file.
 #[derive(Default, Debug)]
 pub struct CrackStressesOut {
+    /// The total pressure in megapascals.
     pub pressure: f64,
+    /// The pore fluid pressure in megapascals.
     pub p_pore: f64,
+    /// The hydration pressure in megapascals.
     pub p_hydr: f64,
+    /// The crack radius in meters.
     pub crack_size: f64,
 }
 
 impl CrackStressesOut {
+    /// Parse a line of text from a crack stress output file into a [`CrackStressesOut`] struct.
+    ///
+    /// # Parameters
+    /// - `line`: The line of text to parse.
     pub fn from_line(line: &str) -> Option<Self> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 10 {
@@ -61,6 +84,10 @@ impl CrackStressesOut {
 }
 
 impl IcyDwarfInput {
+    /// Recover the simulation state from saved output files in a specified folder.
+    ///
+    /// # Parameters
+    /// - `output_folder`: The path to the folder containing saved simulation output files.
     pub fn recover(&self, output_folder: &str) -> Option<(Vec<WorldState>, f64)> {
         let nr = self.grid.n_zones;
         let mut world_states = Vec::with_capacity(self.n_moons());

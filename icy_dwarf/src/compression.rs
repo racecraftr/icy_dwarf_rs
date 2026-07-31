@@ -1,3 +1,5 @@
+//! This module calculates planetary density and pressure profiles under material compression.
+
 use std::{
     f64::consts::{FRAC_PI_3, PI},
     fs,
@@ -19,6 +21,11 @@ use crate::{
 const FRAC_3_4PI: f64 = 0.75 / PI;
 
 impl IcyDwarfInput {
+    /// Calculate interior density, gravity, and hydrostatic pressure profiles under material compression.
+    ///
+    /// # Parameters
+    /// - `data_folder`: The path to the folder containing data files.
+    /// - `thermal_outputs`: The array of thermal output history data across radial zones.
     pub fn compression(
         &self,
         data_folder: &str,
@@ -349,22 +356,38 @@ impl IcyDwarfInput {
     }
 }
 
+/// This struct stores equation of state parameters for a compressed planetary material.
 #[derive(Debug, Clone, Copy)]
 pub struct PlanMatEntry {
+    /// The database index number of the material.
     pub db_index: usize,
+    /// The equation of state model identifier.
     pub eos: i32,
+    /// The zero-pressure density in grams per cubic centimeter.
     pub rho_0: f64,
+    /// The specific heat coefficient.
     pub c: f64,
+    /// The material exponent parameter.
     pub nn: f64,
+    /// The bulk modulus at zero pressure in gigapascals.
     pub ks_0: f64,
+    /// The pressure derivative of the bulk modulus.
     pub ks_p: f64,
+    /// The reference specific volume.
     pub v_0: f64,
+    /// The reference temperature in Kelvin.
     pub t_ref: f64,
+    /// Thermal expansion fitting coefficients.
     pub a: [f64; 2],
+    /// Pressure compression fitting coefficients.
     pub b: [f64; 3],
 }
 
 impl PlanMatEntry {
+    /// Parse a slice of string tokens into a [`PlanMatEntry`] struct.
+    ///
+    /// # Parameters
+    /// - `entry`: The slice of string tokens to parse.
     pub fn from(entry: &[&str]) -> Option<Self> {
         if entry.len() < 14 {
             None
@@ -390,6 +413,12 @@ impl PlanMatEntry {
     }
 }
 
+/// Read equation of state parameters for materials from the database file.
+/// The state parameters are sorted by database index.
+///
+/// # Parameters
+/// - `data_folder`: The path to the folder containing data files.
+/// - `_n_comp`: The requested count of material components.
 pub fn planmat(data_folder: &str, _n_comp: usize) -> Option<Vec<PlanMatEntry>> {
     let planmat_db = PathBuf::from(data_folder).join("Compression_planmat.txt");
     let planmat_db = fs::read_to_string(planmat_db).ok()?;
@@ -411,7 +440,11 @@ pub fn planmat(data_folder: &str, _n_comp: usize) -> Option<Vec<PlanMatEntry>> {
     )
 }
 
+/// Find the index of a material entry in the database by its database ID.
+///
+/// # Parameters
+/// - `planmat_db`: The database slice containing material entries.
+/// - `mat`: The material database index to search for.
 pub fn planmat_index(planmat_db: &[PlanMatEntry], mat: usize) -> Option<usize> {
-    // planmat_db.iter().position(|e| e.db_index == mat)
     planmat_db.binary_search_by_key(&mat, |e| e.db_index).ok()
 }

@@ -1,3 +1,5 @@
+//! This crate implements the IcyDwarf planetary interior thermal evolution simulation program in Rust.
+
 mod compression;
 mod crack;
 mod crack_table;
@@ -31,33 +33,39 @@ use crate::{
     water_rock::water_rock,
 };
 
+/// This struct parses and stores command line arguments.
 #[allow(dead_code)]
 #[derive(Parser)]
 pub struct Args {
-    /// The path to the IcyDwarf input.
+    /// The path to the IcyDwarf input file.
     pub input_path: String,
 
     /// The path to the Output folder, in which the subroutines will write files.
-    /// By default, this will be set to the Output folder in the current working directory.
-    #[arg(short, long, value_name = "OUTPUT FOLDER", default_value = "Outputs/")]
+    #[arg(short, long, value_name = "OUTPUT FOLDER", default_value = "Outputs")]
     pub output_folder: String,
 
     /// The path to the Data folder, in which inputs to subroutines will be read.
-    /// By default, this will bes set to the Data folder in the current working directory.
-    #[arg(short, long, value_name = "DATA FOLDER", default_value = "Data/")]
+    #[arg(short, long, value_name = "DATA FOLDER", default_value = "Data")]
     pub data_folder: String,
 }
 
 impl Args {
+    /// Construct a file path inside the configured data folder.
+    ///
+    /// # Parameters
+    /// - `file_name`: The relative file name string inside the data folder.
+    ///
+    /// # Returns
+    /// A [`PathBuf`] pointing to the file.
     pub fn data_path(&self, file_name: &str) -> PathBuf {
-        let mut res = PathBuf::from(&self.data_folder);
-        res.push(file_name);
-        res
+        PathBuf::from(&self.data_folder).join(file_name)
     }
 }
 
+/// Global static instance of parsed command line arguments.
 pub static GLOBAL_ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
 
+/// Entry point for the IcyDwarf command line application.
 fn main() {
     println!(
         r#"
@@ -238,6 +246,11 @@ For more information, visit https://ww.gnu.org/licenses.
     }
 }
 
+/// Create an output file in the output directory if it does not exist.
+///
+/// # Parameters
+/// - `output_path`: The reference directory path string.
+/// - `file_name`: The name of the file to create.
 pub fn create_output(output_path: &String, file_name: String) -> Result<(), String> {
     if let Err(e) = fs::create_dir_all(output_path) {
         return Err(format!(
@@ -256,6 +269,12 @@ pub fn create_output(output_path: &String, file_name: String) -> Result<(), Stri
     Ok(())
 }
 
+/// Append a row of numerical data to an output file.
+///
+/// # Parameters
+/// - `output_path`: The reference directory path string.
+/// - `file_name`: The name of the file string.
+/// - `data`: The slice of floating point numbers to append.
 pub fn append_output(output_path: &String, file_name: &str, data: &[f64]) -> Result<(), String> {
     use std::io::Write;
     let file_path = PathBuf::from(&output_path).join(file_name);
@@ -284,9 +303,18 @@ pub fn append_output(output_path: &String, file_name: &str, data: &[f64]) -> Res
     Ok(())
 }
 
+/// Type alias for 2D real matrices.
 pub type FloatMat = Mat<Own<f64, usize, usize>>;
+/// Type alias for 2D complex matrices.
 pub type ComplexMat = Mat<Own<Complex64, usize, usize>>;
 
+/// Convert a 2D vector slice to a `faer` matrix.
+///
+/// # Parameters
+/// - `mat`: The slice of 2D vectors.
+///
+/// # Returns
+/// An optional `faer` [`Mat`] matrix.
 pub fn to_faer_mat<T>(mat: &[Vec<T>]) -> Option<Mat<Own<T>>>
 where
     T: Add + Sub + Mul + Div + PartialOrd + Clone,
@@ -300,12 +328,19 @@ where
     Some(m)
 }
 
+/// Convert a real matrix to a complex matrix.
+///
+/// # Parameters
+/// - `mat`: The reference real matrix.
+///
+/// # Returns
+/// A complex [`ComplexMat`] matrix.
 pub fn mat_as_complex(mat: &FloatMat) -> ComplexMat {
     let (rows, cols) = mat.shape();
     Mat::from_fn(rows, cols, |i, j| Complex64::from(mat[(i, j)]))
 }
 
-/// Constants that are used throughout the IcyDwarf code.
+/// This module defines physical, chemical, and numerical constants for the simulation.
 pub mod consts {
     // -----------------------------------------------------------------
     // PHYSICAL AND MATHEMATICAL CONSTANTS

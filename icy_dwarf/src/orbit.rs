@@ -1,20 +1,5 @@
-//!
-//! orbit.rs
-//!
-//! Author: Avi Gupta (avigupta.mail@gmail.com)
-//!
-//! Handles orbital evolution routines.
-//!
-//!Copyright (C) 2026 Avi Gupta (avigupta.mail@gmail.com)
-//!  This program is free software: you can redistribute it and/or modify it
-//! under the terms of the GNU General Public License as published by the Free
-//! Software Foundation, either version 3 of the License, or (at your option) any
-//! later version. This program is distributed in the hope that it will be
-//! useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
-//!  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
-//! Public License for more details. You should have received a copy of the GNU
-//! General Public License along with this program. If not, see
-//! <http://www.gnu.org/licenses/>.
+//! This module calculates orbital mechanics, tidal migration, and mean-motion resonances.
+
 use std::path::PathBuf;
 
 use crate::{
@@ -27,9 +12,14 @@ use crate::{
 const ORB_D_TIME: f64 = 5.0e-4 * 1.0e-6 * MYR2SEC;
 
 impl IcyDwarfInput {
-    //! The original code used a large number of parameters
-    //! that have since been managed by [`IcyDwarfInput`].
-    /// Main function that handles orbital evolution routines.
+    /// Calculate orbital evolution for a satellite over a specified time step.
+    ///
+    /// # Parameters
+    /// - `world_idx`: The index of the satellite in the worlds list.
+    /// - `world_states`: The mutable array of world states for all moons.
+    /// - `d_time`: The duration of the time step in seconds.
+    /// - `real_time`: The current simulation time in seconds.
+    /// - `q_prim`: The current tidal dissipation factor of the primary body.
     pub fn orbit(
         &self,
         world_idx: usize,
@@ -651,8 +641,17 @@ impl IcyDwarfInput {
         }
     }
 
-    /// Checks for orbital mean-motion resonances between two moons by
-    /// comparing the mean motion of a given moon `im` with that of all other moons.
+    /// Check for mean-motion orbital resonance conditions between moon pairs.
+    ///
+    /// # Parameters
+    /// - `im`: The target moon index to evaluate against all other moons.
+    /// - `world_states`: The slice of world states for all moons.
+    /// - `resonance`: The mutable matrix storing detected resonance values.
+    /// - `p_capture`: The mutable matrix storing resonance capture probabilities.
+    /// - `real_time`: The current simulation time in seconds.
+    /// - `a_old`: The slice of previous semi-major axis values.
+    /// - `t_tide`: The slice of tidal timescales.
+    /// - `q_prim`: The current tidal dissipation factor of the primary body.
     pub fn res_check(
         &self,
         im: usize,
@@ -741,7 +740,12 @@ impl IcyDwarfInput {
         }
     }
 
-    /// Screens out multiple resonances to keep only the strongest or already in-place ones.
+    /// Screen active orbital resonances against previously accounted resonances.
+    ///
+    /// # Parameters
+    /// - `resonance`: The slice of detected resonance values.
+    /// - `res_acct_for`: The mutable output slice of active accounted resonances.
+    /// - `res_acct_for_old`: The slice of previously accounted resonances.
     pub fn resscreen(&self, resonance: &[f64], res_acct_for: &mut [f64], res_acct_for_old: &[f64]) {
         let nmoons = resonance.len();
         res_acct_for.fill(0.0);
@@ -749,23 +753,14 @@ impl IcyDwarfInput {
         let mut res_min = IJMAX as f64;
         let mut nbres = 0;
 
-        // Find the min order of resonance for each moon and the number of moons
-        // involved in resonances of this order
-
-        // Copy only the lowest-order resonances for each moon
         for i in 0..nmoons {
             if resonance[i] > 0.0 && resonance[i] <= res_min {
                 res_min = resonance[i];
                 nbres += 1;
                 res_acct_for[i] = resonance[i];
             }
-            // if resonance[i] == res_min {
-            //     nbres += 1;
-            //     res_acct_for[i] = resonance[i];
-            // }
         }
 
-        // Zero out newer resonances if there are multiple of lowest order
         if nbres > 1 {
             for i in 0..nmoons {
                 if res_acct_for_old[i] == 0.0 && res_acct_for[i] > 0.0 {
@@ -775,7 +770,16 @@ impl IcyDwarfInput {
         }
     }
 
-    /// Calculates capture probability in a resonance.
+    /// Calculate the capture probability into a mean-motion resonance.
+    ///
+    /// # Parameters
+    /// - `world_states`: The slice of world states.
+    /// - `inner`: The inner moon index.
+    /// - `outer`: The outer moon index.
+    /// - `j`: The resonance order integer.
+    ///
+    /// # Returns
+    /// The probability of resonance capture between 0.0 and 1.0.
     pub fn mmr_capture_probability(
         &self,
         world_states: &[WorldState],
@@ -806,6 +810,15 @@ impl IcyDwarfInput {
     }
 }
 
+/// Calculate the Laplace coefficient for orbital resonance calculations.
+///
+/// # Parameters
+/// - `alpha`: The semi-major axis ratio.
+/// - `j`: The harmonic order parameter.
+/// - `s`: The half-integer scaling coefficient.
+///
+/// # Returns
+/// The calculated Laplace coefficient value.
 pub fn laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
     let mut b_lap_j = 1_f64;
     let mut temp = 1_f64;
@@ -825,6 +838,15 @@ pub fn laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
         * 2.
 }
 
+/// Calculate the first derivative of the Laplace coefficient.
+///
+/// # Parameters
+/// - `alpha`: The semi-major axis ratio.
+/// - `j`: The harmonic order parameter.
+/// - `s`: The half-integer scaling coefficient.
+///
+/// # Returns
+/// The first derivative of the Laplace coefficient.
 pub fn d_laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
     let mut db_lap_j = 1_f64;
     let mut temp = 1_f64;
@@ -844,6 +866,15 @@ pub fn d_laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
         * 2.
 }
 
+/// Calculate the second derivative of the Laplace coefficient.
+///
+/// # Parameters
+/// - `alpha`: The semi-major axis ratio.
+/// - `j`: The harmonic order parameter.
+/// - `s`: The half-integer scaling coefficient.
+///
+/// # Returns
+/// The second derivative of the Laplace coefficient.
 pub fn d2_laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
     let mut d2b_lapj = j * (j - 1.);
     let mut temp = 0.;
@@ -868,6 +899,19 @@ pub fn d2_laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
         * 2.
 }
 
+/// Perform modified midpoint integration for orbital differential equations.
+///
+/// # Parameters
+/// - `y`: The initial variable vector.
+/// - `dydx`: The initial derivative vector.
+/// - `params`: The Hamiltonian parameters struct reference.
+/// - `xs`: The start position value.
+/// - `htot`: The total step size.
+/// - `nstep`: The number of substeps.
+/// - `derivs`: The derivative evaluation function pointer.
+///
+/// # Returns
+/// The integrated variable vector at the end of the step.
 pub fn mmid(
     y: &[f64],
     dydx: &[f64],
@@ -910,34 +954,69 @@ pub fn mmid(
     yout
 }
 
+/// This struct stores parameters for mean-motion resonance Hamiltonian calculations.
 pub struct MmrAvgHamParams {
+    /// Satellite mass pair array.
     pub m: [f64; 2],
+    /// Satellite radius pair array.
     pub r: [f64; 2],
+    /// Tidal heating rate pair array.
     pub w: [f64; 2],
+    /// Resonance order integer value.
     pub j: f64,
+    /// Primary body mass.
     pub m_prim: f64,
+    /// Primary body radius.
     pub r_prim: f64,
+    /// Primary body second zonal harmonic coefficient.
     pub j2_prim: f64,
+    /// Primary body fourth zonal harmonic coefficient.
     pub j4_prim: f64,
+    /// Primary body second Love number.
     pub k2_prim: f64,
+    /// Primary body tidal dissipation factor.
     pub q_prim: f64,
+    /// Secular eccentricity coefficient.
     pub cs_ee: f64,
+    /// Secular mutual eccentricity coefficient.
     pub cs_eep: f64,
+    /// Resonant inner eccentricity coefficient.
     pub cr_e: f64,
+    /// Resonant outer eccentricity coefficient.
     pub cr_ep: f64,
+    /// Resonant squared inner eccentricity coefficient.
     pub cr_ee: f64,
+    /// Resonant product eccentricity coefficient.
     pub cr_eep: f64,
+    /// Resonant squared outer eccentricity coefficient.
     pub cr_epep: f64,
+    /// Speedup multiplier factor.
     pub speedup: f64,
+    /// Orbital direction sign array.
     pub psgn: [f64; 2],
+    /// Resonance lock flag.
     pub reslock: bool,
+    /// Tidal timescale pair array.
     pub ttide: [f64; 2],
+    /// Lindblad resonance alpha factor.
     pub alpha_lind: f64,
+    /// Ring surface mass density.
     pub ring_surface_density: f64,
+    /// Ring inner radius.
     pub aring_in: f64,
+    /// Ring outer radius.
     pub aring_out: f64,
 }
 
+/// Calculate the derivatives of the averaged Hamiltonian for mean-motion resonances.
+///
+/// # Parameters
+/// - `_x`: The independent time variable.
+/// - `y`: The state vector array.
+/// - `params`: The [`MmrAvgHamParams`] reference.
+///
+/// # Returns
+/// A vector of calculated state derivatives.
 pub fn mmr_avg_ham(_x: f64, y: &[f64], params: &MmrAvgHamParams) -> Vec<f64> {
     let h = [y[0], y[3]];
     let k = [y[1], y[4]];

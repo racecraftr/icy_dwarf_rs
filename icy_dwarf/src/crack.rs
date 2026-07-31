@@ -1,60 +1,111 @@
-use std::{f64::consts::TAU, fs, path::Path};
+//! This module calculates core cracking mechanics and stress intensity profiles.
 
-use crate::{
-    consts::*, input::IcyDwarfInput, planet_system::ZoneState, traits::float_traits::FloatExt,
+use std::{
+    f64::consts::TAU,
+    fs,
+    path::{Path, PathBuf},
 };
 
+use crate::{
+    Args, consts::*, input::IcyDwarfInput, planet_system::ZoneState, traits::float_traits::FloatExt,
+};
+
+/// This struct holds lookup tables for core cracking stress intensity calculations.
 pub struct Data {
+    /// Thermal expansion mismatch stress intensity table.
     pub atp: Vec<Vec<f64>>,
+    /// Fluid thermal expansion alpha factor table.
     pub alpha: Vec<Vec<f64>>,
+    /// Fluid compressibility beta factor table.
     pub beta: Vec<Vec<f64>>,
+    /// Chrysotile mineral equilibrium table.
     pub chrysotile: Vec<Vec<f64>>,
+    /// Stress intensity integral table.
     pub integral: Vec<Vec<f64>>,
+    /// Magnesite mineral equilibrium table.
     pub magnesite: Vec<Vec<f64>>,
+    /// Silica mineral equilibrium table.
     pub silica: Vec<Vec<f64>>,
 }
 
+/// This struct stores compressed material parameters for cracking calculations.
 pub struct CompPlanmat {
+    /// The material name.
     pub material: String,
+    /// The physical test conditions description.
     pub conditions: String,
+    /// The reference paper citation.
     pub reference: String,
+    /// The material database index.
     pub index: usize,
+    /// The equation of state identifier.
     pub eos: f64,
+    /// The zero-pressure density.
     pub rho0: f64,
+    /// The specific heat coefficient.
     pub c: f64,
+    /// The material exponent parameter.
     pub n: f64,
+    /// The bulk modulus at zero pressure.
     pub k0: f64,
+    /// The pressure derivative of the bulk modulus.
     pub dk_dp: f64,
+    /// The reference volume.
     pub v0: f64,
+    /// The reference temperature.
     pub tref: f64,
+    /// First thermal expansion fitting parameter.
     pub a0: f64,
+    /// Second thermal expansion fitting parameter.
     pub a1: f64,
+    /// First pressure fitting parameter.
     pub b1: f64,
+    /// Second pressure fitting parameter.
     pub b2: f64,
 }
 
+/// This struct stores calculated cracking stress parameters and crack state updates.
 pub struct CrackOutput {
+    /// Total pressure in megapascals.
     pub pressure: f64,
+    /// Brittle strength of rock in megapascals.
     pub brittle_strength: f64,
+    /// Critical stress intensity threshold.
     pub crit_intensity: f64,
+    /// Current stress intensity value.
     pub stress_intensity: f64,
-    /// Pore water pressure in MPa (named porosity to match output mappings)
+    /// Pore water pressure in megapascals.
     pub porosity: f64,
-    /// Hydration stress/pressure in MPa (named deg_of_hydration to match output mappings)
+    /// Hydration pressure in megapascals.
     pub deg_of_hydration: f64,
+    /// Old crack radius from hydration in meters.
     pub crack_size_hydr_old: f64,
+    /// Old crack radius from dissolution in meters.
     pub crack_size_diss_old: f64,
+    /// Current crack radius in meters.
     pub crack_size: f64,
 
-    // Updated states returned as part of the output
+    /// Crack state identifier value.
     pub crack: f64,
+    /// Pore pressure value in pascals.
     pub p_pore: f64,
+    /// Hydration stress value in pascals.
     pub p_hydr: f64,
+    /// Chemical activity quotients array.
     pub act: [f64; 3],
 }
 
 impl IcyDwarfInput {
-    /// Calculation of the depth and profile of cracking over time.
+    /// Calculate core cracking depth and stress profiles over a time step.
+    ///
+    /// # Parameters
+    /// - `zone`: The mutable state of the radial zone.
+    /// - `dtime`: The duration of the time step in seconds.
+    /// - `data`: The lookup table data structure.
+    /// - `circ`: Flag to enable ocean circulation and dissolution.
+    ///
+    /// # Returns
+    /// A [`CrackOutput`] struct containing calculated stress parameters.
     pub fn crack(&self, zone: &mut ZoneState, dtime: f64, data: &Data, circ: bool) -> CrackOutput {
         let warnings = self.housekeeping.warnings;
         let thermal_mismatch = self.core_crack.incl_therm_mismatch;
@@ -351,20 +402,32 @@ impl IcyDwarfInput {
     }
 }
 
-pub fn read_data(dat_folder: &String) -> Option<Data> {
+/// Read cracking lookup tables from data files in the specified directory.
+///
+/// # Parameters
+/// - `dat_folder`: The folder path containing data files.
+///
+/// # Returns
+/// An optional [`Data`] struct containing lookup tables.
+pub fn read_data(args: &Args) -> Option<Data> {
     Some(Data {
-        atp: read_data_file(&format!("{}/Crack_aTP.txt", dat_folder))?,
-        alpha: read_data_file(&format!("{}/Crack_alpha.txt", dat_folder))?,
-        beta: read_data_file(&format!("{}/Crack_beta.txt", dat_folder))?,
-        chrysotile: read_data_file(&format!("{}/Crack_chrysotile.txt", dat_folder))?,
-        integral: read_data_file(&format!("{}/Crack_integral.txt", dat_folder))?,
-        magnesite: read_data_file(&format!("{}/Crack_magnesite.txt", dat_folder))?,
-        silica: read_data_file(&format!("{}/Crack_silica.txt", dat_folder))?,
+        // did you know that there is a planet made out of diamonds?
+        // our universe is filled with horrors beyond our comprehension, such as the
+        // supermassive black hole TON-618. (More like SON-618 amirite?)
+        // これを分かれば、すごいんだ
+        // Anyways here's the code
+        atp: read_data_file(&args.data_path("Crack_AtP.txt"))?,
+        alpha: read_data_file(&args.data_path("Crack_alpha.txt"))?,
+        beta: read_data_file(&args.data_path("Crack_beta.txt"))?,
+        chrysotile: read_data_file(&args.data_path("Crack_chrysotile.txt"))?,
+        integral: read_data_file(&args.data_path("Crack_integral.txt"))?,
+        magnesite: read_data_file(&args.data_path("Crack_magnesite.txt"))?,
+        silica: read_data_file(&args.data_path("Crack_silica.txt"))?,
     })
 }
 
 /// Reads a file in the specified Data/ folder.
-fn read_data_file(dat_file_path: &String) -> Option<Vec<Vec<f64>>> {
+fn read_data_file(dat_file_path: &PathBuf) -> Option<Vec<Vec<f64>>> {
     let Ok(s) = fs::read_to_string(Path::new(dat_file_path)) else {
         return None;
     };
@@ -415,8 +478,17 @@ fn look_up(x: f64, mut x_var: f64, x_step: f64, size: usize, warnings: bool) -> 
     }
 }
 
-/// Calculates the creep rate in s-1 of ice, rock, or a mixture using
-/// flow laws. Stresses are hydrostatic pressure/(1-porosity).
+/// Calculate the creep rate in reciprocal seconds for ice and rock mixtures.
+///
+/// # Parameters
+/// - `t`: The temperature in Kelvin.
+/// - `p`: The hydrostatic pressure in pascals.
+/// - `x_ice`: The mass fraction of water ice.
+/// - `porosity`: The rock matrix porosity.
+/// - `x_hydr`: The degree of rock hydration.
+///
+/// # Returns
+/// The total creep rate.
 pub fn creep(t: f64, p: f64, x_ice: f64, porosity: f64, x_hydr: f64) -> f64 {
     let p_por = p / MPA / (1.0 - porosity);
     let eps_disl = 4.0e5 * p_por.powi(4) * (-60.0e3 / (R_G * t)).exp();
@@ -452,8 +524,16 @@ pub fn creep(t: f64, p: f64, x_ice: f64, porosity: f64, x_hydr: f64) -> f64 {
     }
 }
 
-/// Calculates the brittle strength in Pa and corresponding ductile
-/// strain rate in s-1 of silicate rock.
+/// Calculate the brittle strength in pascals and ductile strain rate in reciprocal seconds for rock.
+///
+/// # Parameters
+/// - `pressure`: The hydrostatic pressure in pascals.
+/// - `x_hydr`: The degree of rock hydration.
+/// - `t`: The temperature in Kelvin.
+/// - `porosity`: The rock matrix porosity.
+///
+/// # Returns
+/// A tuple containing brittle strength and strain rate.
 pub fn strain(pressure: f64, x_hydr: f64, t: f64, porosity: f64) -> (f64, f64) {
     let hydr_strength = MU_F_SERP * pressure;
     let dry_strength = if pressure <= 200.0e6 {

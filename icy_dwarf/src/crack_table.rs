@@ -1,3 +1,5 @@
+//! This module pre-computes lookup tables required for core cracking stress intensity calculations.
+
 use crate::consts::*;
 use extendr_api::prelude::*;
 use std::path::PathBuf;
@@ -6,11 +8,21 @@ use std::{
     io::Write,
 };
 
+/// Construct a file system path for a data file in a folder.
+///
+/// # Parameters
+/// - `data_folder`: The folder path string.
+/// - `file_name`: The relative file name string.
+///
+/// # Returns
+/// A [`PathBuf`] pointing to the data file.
+#[allow(dead_code)]
 pub fn data_path(data_folder: &str, file_name: &str) -> PathBuf {
     let mut res = PathBuf::from(data_folder);
     res.push(file_name);
     res
 }
+
 /// Helper function to write output matrix to a text file in a format readable by the main code.
 fn write_output(data: &[Vec<f64>], base_path: &str, relative_file: &str) -> Result<(), String> {
     let mut path = PathBuf::from(base_path);
@@ -36,10 +48,11 @@ fn write_output(data: &[Vec<f64>], base_path: &str, relative_file: &str) -> Resu
     Ok(())
 }
 
-/// Calculate the integral part of equation (4) of Vance et al. (2007)
-/// as a function of flaw size `a_var`, and determine the optimal `a_var`
-/// that maximizes stress intensity `K_I` for various `deltaT` and `P`.
-/// Outputs `Crack_integral.txt` and `Crack_aTP.txt`.
+/// Calculate stress intensity integral tables and thermal mismatch flaw size tables.
+///
+/// # Parameters
+/// - `data_dir`: The directory path for generated data files.
+/// - `warnings`: Flag to display status messages.
 pub fn a_tp(data_dir: &str, warnings: bool) -> Result<(), String> {
     let mut integral = vec![vec![0.0; 2]; INT_SIZE as usize];
 
@@ -112,9 +125,11 @@ pub fn a_tp(data_dir: &str, warnings: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Calculate the thermal expansivity (`alpha`) and compressibility (`beta`) of water
-/// over a range of T and P using CHNOSZ.
-/// Outputs `Crack_alpha.txt` and `Crack_beta.txt`.
+/// Calculate thermal expansivity and compressibility tables for water using CHNOSZ.
+///
+/// # Parameters
+/// - `data_dir`: The directory path for generated data files.
+/// - `warnings`: Flag to display status messages.
 pub fn crack_water_chnosz(data_dir: &str, warnings: bool) -> Result<(), String> {
     let mut tempk = TEMPK_MIN;
     let mut p_bar = P_BAR_MIN;
@@ -176,9 +191,11 @@ pub fn crack_water_chnosz(data_dir: &str, warnings: bool) -> Result<(), String> 
     Ok(())
 }
 
-/// Calculate log K for the dissolution of amorphous silica, chrysotile, and magnesite
-/// over a range of T and P using CHNOSZ.
-/// Outputs `Crack_silica.txt`, `Crack_chrysotile.txt`, and `Crack_magnesite.txt`.
+/// Calculate equilibrium constant tables for mineral species dissolution using CHNOSZ.
+///
+/// # Parameters
+/// - `data_dir`: The directory path for generated data files.
+/// - `warnings`: Flag to display status messages.
 pub fn crack_species_chnosz(data_dir: &str, warnings: bool) -> Result<(), String> {
     let mut tempk = TEMPK_MIN_SPECIES;
     let mut p_bar = P_BAR_MIN;

@@ -1,9 +1,20 @@
+//! This module simulates water-rock interactions and geochemical leaching using PHREEQC and CHNOSZ.
+
 use crate::consts::{KELVIN, NAQ, NELTS, NGASES, NMINGAS, NVAR};
 use extendr_api::prelude::*;
 use std::fs;
 
-/// Simulates water-rock interactions using PHREEQC.
-/// Returns the fraction of K (potassium) leached.
+/// Simulate water-rock interactions using PHREEQC and return the leached potassium mass fraction.
+///
+/// # Parameters
+/// - `path`: The base directory path string.
+/// - `t`: The temperature in Kelvin.
+/// - `p`: The pressure in bars.
+/// - `pe`: The electron activity value.
+/// - `wr`: The water-to-rock mass ratio.
+///
+/// # Returns
+/// The fraction of potassium leached from the rock material.
 pub fn water_rock(path: &str, t: f64, p: f64, pe: f64, mut wr: f64) -> Result<f64, String> {
     let ph = 7.0;
 
@@ -124,26 +135,41 @@ pub fn water_rock(path: &str, t: f64, p: f64, pe: f64, mut wr: f64) -> Result<f6
     Ok(frac_k_leached)
 }
 
+/// This enum defines variant types for IPhreeqc C FFI data exchange.
 #[repr(C)]
+#[allow(dead_code)]
 pub enum VarType {
+    /// Empty variable type.
     Empty = 0,
+    /// Error variable type.
     Error = 1,
+    /// Long integer variable type.
     Long = 2,
+    /// Double precision floating-point variable type.
     Double = 3,
+    /// String pointer variable type.
     String = 4,
 }
 
+/// This union stores raw variable values for IPhreeqc C FFI data exchange.
 #[repr(C)]
 pub union VarValue {
+    /// Long integer value.
     pub l_val: std::ffi::c_long,
+    /// Double precision floating-point value.
     pub d_val: f64,
+    /// Character pointer value.
     pub s_val: *mut std::ffi::c_char,
+    /// Result code integer value.
     pub vresult: i32,
 }
 
+/// This struct wraps a variable type and value for IPhreeqc C FFI data exchange.
 #[repr(C)]
 pub struct Var {
+    /// The type of the variable.
     pub vtype: VarType,
+    /// The union value of the variable.
     pub val: VarValue,
 }
 
@@ -227,7 +253,13 @@ fn extract_write(instance: i32, data: &mut [f64]) {
     }
 }
 
-/// Loads molar masses from Data/Molar_masses.txt
+/// Load molar mass vectors from the data file.
+///
+/// # Parameters
+/// - `path`: The base path string pointing to the data folder.
+///
+/// # Returns
+/// A nested vector containing molar masses of chemical species.
 pub fn load_mol_mass(path: &str) -> Result<Vec<Vec<f64>>, String> {
     let mut molmass = vec![vec![0.0; NELTS as usize]; NVAR as usize];
     let file_path = format!("{}/Data/Molar_masses.txt", path);
@@ -338,7 +370,10 @@ mod tests {
     #[test]
     fn test_iphreeqc_create_and_destroy() {
         let instance = unsafe { CreateIPhreeqc() };
-        assert!(instance >= 0, "CreateIPhreeqc should return a non-negative instance ID");
+        assert!(
+            instance >= 0,
+            "CreateIPhreeqc should return a non-negative instance ID"
+        );
         let res = unsafe { DestroyIPhreeqc(instance) };
         assert_eq!(res, 0, "DestroyIPhreeqc should return 0 (IPQ_OK)");
     }
