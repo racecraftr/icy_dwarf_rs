@@ -1,0 +1,44 @@
+build: check
+    cargo build
+
+[unix]
+check:
+    #!/bin/sh
+    set -e
+    echo "Checking prerequisites..."
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "Error: cargo is not installed."
+        exit 1
+    fi
+    if ! command -v Rscript >/dev/null 2>&1 && ! command -v R >/dev/null 2>&1; then
+        echo "Error: R is not installed."
+        exit 1
+    fi
+    if ! Rscript -e "if (!suppressMessages(require('CHNOSZ'))) quit(status = 1)" >/dev/null 2>&1; then
+        echo "Error: CHNOSZ package is not installed in R."
+        exit 1
+    fi
+    if ! command -v gfortran >/dev/null 2>&1 && ! ls /usr/lib*/libgfortran* /usr/local/lib*/libgfortran* /opt/homebrew/lib*/libgfortran* 2>/dev/null | grep -q libgfortran; then
+        echo "Error: libgfortran is not installed."
+        exit 1
+    fi
+    if ! ls /usr/local/lib*/libiphreeqc* /usr/lib*/libiphreeqc* /opt/homebrew/lib*/libiphreeqc* 2>/dev/null | grep -q libiphreeqc && ! (command -v ldconfig >/dev/null 2>&1 && ldconfig -p | grep -q iphreeqc); then
+        echo "Error: IPHREEQC library is not installed."
+        exit 1
+    fi
+    echo "All required dependencies are installed!"
+
+[windows]
+check:
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "\
+        $failed = $false; \
+        if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { Write-Host 'Error: cargo is not installed.'; $failed = $true }; \
+        if (-not (Get-Command Rscript -ErrorAction SilentlyContinue) -and -not (Get-Command R -ErrorAction SilentlyContinue)) { Write-Host 'Error: R is not installed.'; $failed = $true } else { \
+            Rscript -e \"if (!suppressMessages(require('CHNOSZ'))) quit(status = 1)\" *> $null; \
+            if ($LASTEXITCODE -ne 0) { Write-Host 'Error: CHNOSZ package is not installed in R.'; $failed = $true }; \
+        }; \
+        if (-not (Get-Command gfortran -ErrorAction SilentlyContinue) -and -not (where.exe libgfortran* 2>$null)) { Write-Host 'Error: libgfortran is not installed.'; $failed = $true }; \
+        if (-not (where.exe iphreeqc* 2>$null) -and -not (where.exe libiphreeqc* 2>$null) -and -not (Test-Path 'C:\usr\local\lib\*iphreeqc*')) { Write-Host 'Error: IPHREEQC library is not installed.'; $failed = $true }; \
+        if ($failed) { exit 1 } else { Write-Host 'All required dependencies are installed!' }; \
+    "
+
