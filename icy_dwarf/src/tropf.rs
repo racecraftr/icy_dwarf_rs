@@ -222,16 +222,17 @@ impl IcyDwarfInput {
         //     globe_time_average(&pns, &(real_lv * &pns))
         // };
 
-        let phi_rns = Col::from_iter((0..SH_TERMS).map(|i| {
-            let n = n_vec[i] as f64;
-            let p = (&pns)[i];
-            let g = tidal_pot_shc[i];
-            3. / (2. * n) * rho_ratio * p / g
-        }));
+        // let phi_rns = Col::from_iter((0..SH_TERMS).map(|i| {
+        //     let n = n_vec[i] as f64;
+        //     let p = (&pns)[i];
+        //     let g = tidal_pot_shc[i];
+        //     3. / (2. * n) * rho_ratio * p / g
+        // }));
+
+        // let nk_fsf = pns[nf - s] / tidal_pot_shc[nf - s];
+        // let k_loven_f = phi_rns[nf - s];
 
         let p_fluidtide = cal_wns.iter().fold(0. + 0. * I, |acc, &n| acc + n);
-        let nk_fsf = pns[nf - s] / tidal_pot_shc[nf - s];
-        let k_loven_f = phi_rns[nf - s];
 
         p_fluidtide
     }
@@ -444,5 +445,3 @@ mod globe_time_average_tests {
         assert!((res[0] - 9.6).abs() < 1e-12);
     }
 }
-
-

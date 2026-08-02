@@ -28,43 +28,8 @@ pub struct Data {
     pub silica: Vec<Vec<f64>>,
 }
 
-/// This struct stores compressed material parameters for cracking calculations.
-pub struct CompPlanmat {
-    /// The material name.
-    pub material: String,
-    /// The physical test conditions description.
-    pub conditions: String,
-    /// The reference paper citation.
-    pub reference: String,
-    /// The material database index.
-    pub index: usize,
-    /// The equation of state identifier.
-    pub eos: f64,
-    /// The zero-pressure density.
-    pub rho0: f64,
-    /// The specific heat coefficient.
-    pub c: f64,
-    /// The material exponent parameter.
-    pub n: f64,
-    /// The bulk modulus at zero pressure.
-    pub k0: f64,
-    /// The pressure derivative of the bulk modulus.
-    pub dk_dp: f64,
-    /// The reference volume.
-    pub v0: f64,
-    /// The reference temperature.
-    pub tref: f64,
-    /// First thermal expansion fitting parameter.
-    pub a0: f64,
-    /// Second thermal expansion fitting parameter.
-    pub a1: f64,
-    /// First pressure fitting parameter.
-    pub b1: f64,
-    /// Second pressure fitting parameter.
-    pub b2: f64,
-}
-
 /// This struct stores calculated cracking stress parameters and crack state updates.
+#[allow(dead_code)]
 pub struct CrackOutput {
     /// Total pressure in megapascals.
     pub pressure: f64,

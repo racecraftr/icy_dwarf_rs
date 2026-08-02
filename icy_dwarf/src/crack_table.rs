@@ -102,7 +102,7 @@ pub fn a_tp(data_dir: &str, warnings: bool) -> Result<(), String> {
                     * delta_t
                     - p_pa * (PI_GREEK * a_var).sqrt();
             }
-            let (k_i_max, k_i_max_a) =
+            let (_k_i_max, k_i_max_a) =
                 k_i.iter().fold((k_i[0][1], k_i[0][0]), |(k_i, k_i_a), v| {
                     (k_i.max(v[1]), k_i_a.max(v[0]))
                 });

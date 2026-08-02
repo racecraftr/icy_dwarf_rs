@@ -11,6 +11,7 @@ use crate::{
 
 const ORB_D_TIME: f64 = 5.0e-4 * 1.0e-6 * MYR2SEC;
 
+#[allow(non_snake_case)]
 impl IcyDwarfInput {
     /// Calculate orbital evolution for a satellite over a specified time step.
     ///
@@ -955,6 +956,7 @@ pub fn mmid(
 }
 
 /// This struct stores parameters for mean-motion resonance Hamiltonian calculations.
+#[allow(dead_code)]
 pub struct MmrAvgHamParams {
     /// Satellite mass pair array.
     pub m: [f64; 2],

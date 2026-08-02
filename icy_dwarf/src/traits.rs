@@ -37,23 +37,6 @@ pub mod float_traits {
     }
 }
 
-/// This module defines helper methods for finding minimum and maximum values.
-pub mod min_max {
-
-    /// Trait to sort pairs of values into minimum and maximum order.
-    pub trait MinMax {
-        /// Sort the pair of numbers so the smaller number comes first.
-        fn min_max(self) -> Self;
-    }
-
-    impl MinMax for (f64, f64) {
-        fn min_max(self) -> Self {
-            let (a, b) = self;
-            (a.min(b), a.max(b))
-        }
-    }
-}
-
 /// This module defines helper methods for value substitution.
 pub mod num_ext {
     use num::complex::Complex64;

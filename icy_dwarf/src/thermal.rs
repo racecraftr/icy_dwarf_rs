@@ -1,6 +1,10 @@
 //! This module solves 1D thermal evolution, tidal dissipation, and heat conduction equations for planetary bodies.
 
-use std::{f64::consts::FRAC_PI_2, fs, process::exit};
+use std::{
+    f64::consts::{FRAC_PI_2, PI},
+    fs,
+    process::exit,
+};
 
 use crate::{
     Args, FloatMat,
@@ -8,8 +12,8 @@ use crate::{
         CM, E_YOUNG_OLIV, E_YOUNG_SERP, GCGS, GRAM, KM, KM2CM, NU_POISSON_OLIV, NU_POISSON_SERP,
         PA2BA, PI_GREEK,
     },
-    crack::read_data,
-    input::{Fracs, IcyDwarfInput},
+    crack::{creep, read_data},
+    input::{ChondriteType, Fracs, IcyDwarfInput},
     planet_system::{RHO_ADHS_TH, RHO_H2OL_TH, RHO_H2OS_TH, RHO_NH3L_TH, WorldState, ZoneState},
     to_faer_mat,
     traits::float_traits::FloatExt,
@@ -32,7 +36,7 @@ impl IcyDwarfInput {
     /// - `world_states`: The mutable array of world states for all moons.
     /// - `dtime`: The duration of the time step in seconds.
     /// - `real_time`: The current simulation time in seconds.
-    /// - `data_folder`: The folder path string containing data files.
+    /// - `args`: The [`Args`] containing the data path.
     pub fn thermal(
         &self,
         world_states: &mut [WorldState],
@@ -86,9 +90,7 @@ impl IcyDwarfInput {
             }
 
             // Track total radioactive heat
-            for &q in &qth {
-                world_state.heat_radio += q;
-            }
+            world_state.heat_radio += qth.iter().sum::<f64>();
 
             // Add tidal heating to Qth
             for (i, zone) in world_state.zones.iter().enumerate() {
@@ -132,7 +134,7 @@ impl IcyDwarfInput {
             // 9. Solve Heat Equation (Energy Update)
             for i in 0..n_zones.saturating_sub(1) {
                 world_state.zones[i].energy_total +=
-                    dtime * qth[i] + 4.0 * PI_GREEK * dtime * (rrflux[i] - rrflux[i + 1]);
+                    dtime * qth[i] + 4.0 * PI * dtime * (rrflux[i] - rrflux[i + 1]);
             }
 
             // 10. Phase Equilibrium / State Update
@@ -266,6 +268,7 @@ impl IcyDwarfInput {
                     Complex64::I * n
                 }
             };
+
             shearmod[i] = match self.world_spec.rhelogy {
                 crate::input::TidalModel::Maxwell => {
                     mu_rigid * world_state.omega.powi(2) * mu_visc.powi(2)
@@ -275,6 +278,7 @@ impl IcyDwarfInput {
                                 / (mu_rigid.powi(2) + (world_state.omega * mu_visc).powi(2)),
                         )
                 }
+
                 crate::input::TidalModel::Burgers => {
                     let mu2 = 0.02 * mu_visc;
                     let c_1 = 2. / mu_rigid + mu2 / (mu_rigid * mu_visc);
@@ -285,25 +289,28 @@ impl IcyDwarfInput {
                             (c_2 + mu2 * world_state.omega.powi(2) * c_1 / mu_rigid) / d_burgers,
                         )
                 }
+
                 crate::input::TidalModel::Andr => {
                     let beta_andr = 1.0 / (mu_rigid * (mu_visc / mu_rigid).powf(alpha_andr));
                     let a_andr = mu_rigid.inv()
                         + world_state.omega.powf(-alpha_andr)
                             * beta_andr
-                            * (alpha_andr * FRAC_PI_2).cos();
+                            * (alpha_andr * FRAC_PI_2).cos()
+                            * gamma_andr;
                     let b_andr = 1.0 / (mu_visc * world_state.omega)
                         + world_state.omega.powf(-alpha_andr)
                         + beta_andr * (alpha_andr * FRAC_PI_2).sin();
                     let d_andr = a_andr.powi(2) + b_andr.powi(2);
                     a_andr / d_andr + cond_i(b_andr / d_andr)
                 }
+
                 crate::input::TidalModel::SunCoop => {
                     let (voigt_comp_offset, voigt_visc_offset, zeta_andr) = (0.43, 0.02, 1.);
                     let comp_maxwell = mu_rigid.inv();
                     let comp_voigt = voigt_comp_offset * comp_maxwell;
                     let visc_voigt = voigt_visc_offset * mu_visc;
-                    let sine_andr =
-                        (alpha_andr * FRAC_PI_2).cos() + cond_i((alpha_andr * FRAC_PI_2).sin());
+                    let sine_andr = (alpha_andr * FRAC_PI_2).cos()
+                        + cond_i((alpha_andr * FRAC_PI_2).sin()) * gamma_andr;
                     let c_comp_maxwell = comp_maxwell + cond_i(1. / (world_state.omega * mu_visc));
                     let c_comp_sub_andr = comp_maxwell
                         * (world_state.omega * comp_maxwell * mu_visc * zeta_andr).pow(-alpha_andr)
@@ -657,7 +664,7 @@ impl ZoneState {
         // Long-lived radionuclides: select abundances by chondrite type
         // C code: chondr==1 → CO, chondr==2 → CV, else → CI
         // Rust: chondrite bool — true → CO, false → CI (CV not in Rust enum)
-        let (n_u235, n_u238, n_th232, n_k40) = if world_spec.chondrite {
+        let (n_u235, n_u238, n_th232, n_k40) = if world_spec.chondrite == ChondriteType::CO {
             (CO_U235, CO_U238, CO_TH232, CO_K40)
         } else {
             (CI_U235, CI_U238, CI_TH232, CI_K40)
@@ -772,41 +779,6 @@ impl ZoneState {
     }
 }
 
-fn creep(t: f64, p: f64, x_ice: f64, porosity: f64, x_hydr: f64) -> f64 {
-    use crate::consts::{D_FLOW_LAW, MPA, R_G};
-    let eff_p = p / MPA / (1.0 - porosity);
-
-    let eps_disl = 4.0e5 * eff_p.powi(4) * (-60.0e3 / (R_G * t)).exp();
-
-    let eps_basal = if t < 255.0 {
-        3.9e-3 * (-49.0e3 / (R_G * t)).exp()
-    } else {
-        3.0e26 * (-192.0e3 / (R_G * t)).exp()
-    } * eff_p.powf(1.8)
-        * D_FLOW_LAW.powf(-1.4);
-
-    let eps_gbs = 5.5e7 * eff_p.powf(2.4) * (-60.0e3 / (R_G * t)).exp();
-    let eps_diff = 3.02e-14 * eff_p * D_FLOW_LAW.powi(-2) * (-59.4e3 / (R_G * t)).exp();
-
-    let creep_rate_ice = eps_diff + (1.0 / eps_basal + 1.0 / eps_gbs).inv() + eps_disl;
-
-    creep_rate_ice
-        * if x_ice > 0.3 {
-            1.
-        } else {
-            let t_eff = t.max(140.);
-            let creep_rate_hydr =
-                416869.3834703355 * eff_p * D_FLOW_LAW.powi(-3) * (-240.0e3 / (R_G * t_eff)).exp();
-            let creep_rate_dry = 177827.94100389228
-                * eff_p
-                * D_FLOW_LAW.powf(-2.98)
-                * (-261.0e3 / (R_G * t_eff)).exp();
-
-            (x_hydr * creep_rate_hydr + (1. - x_hydr) * creep_rate_dry)
-                * (0.3 + 7. / 3. * x_ice).exp()
-        }
-}
-
 pub fn prop_mtx(
     r: &[f64],
     rho: &[f64],
@@ -850,8 +822,8 @@ pub fn prop_mtx(
                 Complex64::from(r_val_3 / 7.0),
                 Complex64::from(r_val),
                 C0,
-                Complex64::from(1.0 / (2.0 * r_val_2)),
-                Complex64::from(1.0 / r_val_4),
+                Complex64::from((2.0 * r_val_2).inv()),
+                Complex64::from(r_val_4.inv()),
                 C0,
             ],
             [
@@ -866,7 +838,7 @@ pub fn prop_mtx(
                 (rho_g_r - sm) * Complex64::from(r_val_2 / 7.0),
                 rho_g_r + sm * 2.0,
                 Complex64::from(-rho[ir] * r_val_2),
-                (rho_g_r - sm * 6.0) / 2.0 * r_val_3,
+                (rho_g_r - sm * 6.0) * 0.5 * r_val_3,
                 (rho_g_r - sm * 8.0) / r_val_5,
                 -rho[ir] / r_val_3.as_cplx(),
             ],
@@ -950,9 +922,9 @@ pub fn prop_mtx(
         }
     }
 
-    bpropmtx[ir_core][2][0] = Complex64::from(1.0);
-    bpropmtx[ir_core][3][1] = Complex64::from(1.0);
-    bpropmtx[ir_core][5][2] = Complex64::from(1.0);
+    bpropmtx[ir_core][2][0] = 1_f64.as_cplx();
+    bpropmtx[ir_core][3][1] = 1_f64.as_cplx();
+    bpropmtx[ir_core][5][2] = 1_f64.as_cplx();
 
     for ir in (ir_core + 1)..nr {
         let mut btemp = [[C0; 3]; 6];
@@ -987,11 +959,7 @@ pub fn prop_mtx(
     if let Some((x, _)) = gauss_jordan(&mbc, &bsurf) {
         for ir in 0..nr {
             for i in 0..6 {
-                let mut sum = C0;
-                for j in 0..3 {
-                    sum += bpropmtx[ir][i][j] * x[(j, 0)];
-                }
-                ytide[ir][i] = sum;
+                ytide[ir][i] = (0_usize..3).map(|j| bpropmtx[ir][i][j] * x[(j, 0)]).sum();
             }
         }
     } else {
@@ -1031,7 +999,7 @@ fn gauss_jordan(
         return None; // avoids unneccessary computation
     }
     let a = Mat::from_fn(rows, cols, |i, j| mat[i][j]);
-    if a.determinant() == Complex64::from(0.0) {
+    if a.determinant() == C0 {
         // matrix is not invertible
         return None;
     }
@@ -1043,6 +1011,7 @@ fn gauss_jordan(
 }
 
 /// This struct stores a snapshot of radial zone state loaded from output CSV files.
+#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct ThermalOut {
     /// Zone radius in centimeters.
@@ -1085,8 +1054,7 @@ impl ThermalOut {
     /// An optional [`ThermalOut`] struct containing the parsed fields.
     pub fn from_line(ln: &str) -> Option<Self> {
         let parts = ln.split_whitespace().collect::<Vec<_>>();
-        let radius_km = parts[0].parse::<f64>().ok()?;
-        let radius_km = radius_km * KM2CM;
+        let radius_km = parts[0].parse::<f64>().ok()? * KM2CM;
         Some(Self {
             radius_km,
             temp_kelvin: parts[1].parse().ok()?,
@@ -1124,6 +1092,7 @@ impl ThermalOut {
     ///
     /// # Returns
     /// A tuple containing total volume and a [`Fracs`] struct of phase volumes.
+    #[allow(dead_code)]
     pub fn vol(&self, input: &IcyDwarfInput) -> (f64, Fracs) {
         let vol_rock = self.mass_rock
             / (self.deg_of_hydr * input.world_spec.rho_hydr_th()

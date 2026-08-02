@@ -357,6 +357,7 @@ impl IcyDwarfInput {
 }
 
 /// This struct stores equation of state parameters for a compressed planetary material.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct PlanMatEntry {
     /// The database index number of the material.

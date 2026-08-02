@@ -26,7 +26,6 @@ pub enum EccModel {
     /// Standard second-order eccentricity model.
     #[default]
     E2,
-
     /// Coupled tenth-order eccentricity model.
     E10Cpl,
     /// Constant time-lag tenth-order eccentricity model.
@@ -116,13 +115,13 @@ pub struct PrimaryWorld {
 
 /// This enum specifies the type of chondrite material.
 #[repr(u8)]
-#[derive(Default, Debug, Clone, Deserialize_repr)]
+#[derive(Default, Debug, Clone, Deserialize_repr, PartialEq, Eq)]
 pub enum ChondriteType {
     /// Carbonaceous Ornans chondrite type.
     #[default]
-    CO,
-    /// Carbonaceous Ivuna chondrite type.
     CI,
+    /// Carbonaceous Ivuna chondrite type.
+    CO,
 }
 
 /// This enum specifies the rheology model used for tidal calculations.
@@ -141,6 +140,7 @@ pub enum TidalModel {
 }
 
 /// This struct defines physical parameters shared across planetary bodies.
+#[allow(dead_code)]
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct WorldSpec {
     /// The density of dry rock material in grams per cubic centimeter.
@@ -148,7 +148,7 @@ pub struct WorldSpec {
     /// The density of hydrated rock material in grams per cubic centimeter.
     pub rho_rock_hydr: f64,
     /// Flag to indicate chondrite composition.
-    pub chondrite: bool,
+    pub chondrite: ChondriteType,
     /// The tidal rheology model.
     pub rhelogy: TidalModel,
     /// The eccentricity model.
@@ -160,6 +160,7 @@ pub struct WorldSpec {
 }
 
 /// This struct defines physical and orbital properties for an icy moon.
+#[allow(dead_code)]
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct IcyWorld {
     /// The name of the world.
@@ -314,6 +315,7 @@ impl IcyDwarfInput {
     ///
     /// # Returns
     /// A nested vector containing initial hydration fractions.
+    #[allow(dead_code)]
     pub fn x_hydr(&self) -> Vec<Vec<f64>> {
         self.worlds
             .iter()

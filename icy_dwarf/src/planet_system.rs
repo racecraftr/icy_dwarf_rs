@@ -8,7 +8,7 @@ use crate::{
     GLOBAL_ARGS, append_output,
     consts::*,
     crack, create_output,
-    input::{Fracs, IcyDwarfInput, IcyWorld, TidalQ, WorldSpec},
+    input::{Fracs, IcyDwarfInput, IcyWorld, QMode, TidalQ, WorldSpec},
     traits::float_traits::FloatExt,
 };
 
@@ -127,7 +127,7 @@ impl ZoneState {
     ///
     /// # Returns
     /// A tuple containing total energy and component energies for rock, ice, and slush.
-    pub fn internal_energy(&self, t_init: f64) -> (f64, (f64, f64, f64)) {
+    pub fn _internal_energy(&self, t_init: f64) -> (f64, (f64, f64, f64)) {
         let n = t_init.powi(2) * 0.5;
         let energy_rock = self.mass_rock * heat_rock(t_init);
         let energy_ice = self.mass_ice * QH2O * n;
@@ -140,7 +140,7 @@ impl ZoneState {
     ///
     /// # Returns
     /// The brittle strength value in pascals.
-    pub fn brittle_strength(&self) -> f64 {
+    pub fn _brittle_strength(&self) -> f64 {
         crack::strain(self.pressure, self.x_hydr, self.temp, self.porosity).0
     }
 
@@ -525,7 +525,6 @@ impl IcyDwarfInput {
             isteps += 1;
 
             if self.primary_world.mass > 0.0 {
-                let nmoons = self.n_moons();
                 if isteps % (n_steps / 10).max(1) == 0 {
                     for (im, world) in world_states.iter().enumerate() {
                         let orbit_output = [
@@ -673,6 +672,7 @@ impl IcyDwarfInput {
     }
 }
 
+#[allow(dead_code)]
 impl IcyWorld {
     pub fn mass(&self) -> f64 {
         self.planetary_dens * 4.0 / 3.0 * PI_GREEK * self.planetary_rad.powi(3)
@@ -698,9 +698,6 @@ impl IcyWorld {
 }
 
 impl WorldSpec {
-    pub fn rho_th(&self) -> (f64, f64, f64, f64, f64) {
-        todo!()
-    }
     pub fn rho_hydr_th(&self) -> f64 {
         self.rho_rock_hydr * GRAM
     }
@@ -715,8 +712,8 @@ impl TidalQ {
         let t_form_min = planets.iter().fold(f64::MAX, |acc, e| acc.min(e.t_form));
         let scaling = (real_time - t_form_min) / (TODAY - t_form_min);
         match self.mode {
-            crate::input::QMode::Lin => self.init + (self.today - self.init) * scaling,
-            crate::input::QMode::ExpDecay => {
+            QMode::Lin => self.init + (self.today - self.init) * scaling,
+            QMode::ExpDecay => {
                 // self.init * ((self.today / self.init).ln() * scaling).exp()
                 //
                 // init * e^(ln(today / init) * scaling)
@@ -724,7 +721,7 @@ impl TidalQ {
                 // = init * (today/init) ^ scaling
                 self.init * (self.today / self.init).powf(scaling)
             }
-            crate::input::QMode::ExpChange => {
+            QMode::ExpChange => {
                 self.init + 1. - self.init * (self.today - self.init + 1.).powf(scaling)
             }
         }
