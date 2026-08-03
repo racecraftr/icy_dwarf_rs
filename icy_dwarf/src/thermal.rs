@@ -1,17 +1,14 @@
 //! This module solves 1D thermal evolution, tidal dissipation, and heat conduction equations for planetary bodies.
 
 use std::{
-    f64::consts::{FRAC_PI_2, PI},
+    f64::consts::{FRAC_PI_3, PI},
     fs,
     process::exit,
 };
 
 use crate::{
     Args, FloatMat,
-    consts::{
-        CM, E_YOUNG_OLIV, E_YOUNG_SERP, GCGS, GRAM, KM, KM2CM, NU_POISSON_OLIV, NU_POISSON_SERP,
-        PA2BA, PI_GREEK,
-    },
+    consts::*,
     crack::{creep, read_data},
     input::{ChondriteType, Fracs, IcyDwarfInput},
     planet_system::{RHO_ADHS_TH, RHO_H2OL_TH, RHO_H2OS_TH, RHO_NH3L_TH, WorldState, ZoneState},
@@ -20,11 +17,11 @@ use crate::{
 };
 use faer::{Mat, linalg::solvers::DenseSolveCore, prelude::Solve};
 use itertools::Itertools;
-use num::{
-    complex::{Complex64, ComplexFloat},
-    pow::Pow,
-    traits::Inv,
-};
+use num::{complex::Complex64, traits::Inv};
+
+pub mod thermal_out;
+use thermal_out::ThermalOut;
+mod tide;
 
 const K: f64 = 200.0e9 / GRAM * CM;
 const C0: Complex64 = Complex64::ZERO;
@@ -100,12 +97,42 @@ impl IcyDwarfInput {
             // Add fluid tidal heating to Qth (using tropf)
             self.fluid_tide(world_state, &mut qth);
 
-            // 6. Thermal Conductivity
-            for zone in world_state.zones.iter_mut() {
-                zone.kappa = zone.kapcond(&self.world_spec);
+            // Rock Hydration & Dehydration
+            self.process_hydration(world_state, &mut qth, dtime);
+
+            // Layer Differentiation (melting / Rayleigh-Taylor)
+            let world_info = self.worlds.iter().find(|w| w.name == world_state.name);
+            let x_p = world_info.map(|w| w.ammonia).unwrap_or(0.0);
+            let t_liq = if x_p >= 1.0e-2 { 174.0 } else { 271.0 };
+            let irdiff_old = world_state.irdiff;
+
+            for i in 0..n_zones.saturating_sub(1) {
+                if i > world_state.irdiff && world_state.zones[i].temp > t_liq {
+                    world_state.irdiff = i;
+                }
+            }
+            if world_state.irdiff > n_zones / 2 {
+                for i in 0..n_zones.saturating_sub(1) {
+                    if i > world_state.irdiff && world_state.zones[i].temp > TDIFF {
+                        world_state.irdiff = i;
+                    }
+                }
+            }
+            if world_state.irdiff > 0 && world_state.irdiff != irdiff_old {
+                let irdiff = world_state.irdiff;
+                self.separate(world_state, irdiff);
             }
 
-            // TODO: Convection routines (convect) when ported
+            // Gravitational Heating Release
+            self.gravitational_heating(world_state, &mut qth, dtime);
+
+            // Parameterized Convection
+            self.convect(world_state);
+
+            // 6. Thermal Conductivity
+            for zone in world_state.zones.iter_mut() {
+                zone.kappa = zone.kapcond(&self.world_spec) * zone.nusselt;
+            }
 
             // 7. Conductive Fluxes (rrflux)
             let mut rrflux = vec![0.0; n_zones + 1];
@@ -161,9 +188,8 @@ impl IcyDwarfInput {
 
             if let Some(last_zone) = world_state.zones.last_mut() {
                 let e_rock = last_zone.mass_rock * crate::planet_system::heat_rock(temp_surf);
-                let e_h2os = last_zone.mass_ice * crate::consts::QH2O * temp_surf.powi(2) * 0.5;
-                let e_slush =
-                    last_zone.mass_ammonia_solid * crate::consts::QADH * temp_surf.powi(2) * 0.5;
+                let e_h2os = last_zone.mass_ice * QH2O * temp_surf.powi(2) * 0.5;
+                let e_slush = last_zone.mass_ammonia_solid * QADH * temp_surf.powi(2) * 0.5;
                 last_zone.energy_total = e_rock + e_h2os + e_slush;
                 last_zone.temp = temp_surf;
             }
@@ -192,206 +218,173 @@ impl IcyDwarfInput {
         )
     }
 
-    // TODO: finish this
-    pub fn tide(&self, world_state: &mut WorldState) {
-        const D_EPS: f64 = 2.22e-16;
-        let base_vec = vec![0_f64; world_state.zones.len()];
-        let mut shearmod = vec![C0; world_state.zones.len()];
-        let mut rho = base_vec.clone();
+    /// Perform core separation / unmixing of differentiated layers.
+    pub fn separate(&self, world_state: &mut WorldState, irdiff: usize) {
+        let n_zones = world_state.zones.len();
+        if n_zones == 0 || irdiff >= n_zones {
+            return;
+        }
 
-        const MU_RIGID_ICE: f64 = 4.0e9 / GRAM * CM;
+        let world_info = self.worlds.iter().find(|w| w.name == world_state.name);
+        let x_fines = world_info.map(|w| w.rock_frac).unwrap_or(0.0);
+        let x_pores = world_info.map(|w| w.rock_h20).unwrap_or(0.0);
 
-        // accumulated mass throughout all the zones.
-        let mut m_acc = base_vec.clone();
-        let mut g_vec = base_vec.clone();
-        drop(base_vec);
-        let alpha_andr = 0.3;
-        for (i, zone) in world_state.zones.iter().enumerate() {
-            rho[i] = zone.mass_total / zone.volumes().0; // density is just mass over volume
-            m_acc[i] = zone.mass_total + if i == 0 { 0. } else { m_acc[i - 1] };
-            g_vec[i] = GCGS * m_acc[i] / (zone.radius + zone.dr).powi(2);
-            let z = if i < world_state.zones.len() - 1 {
-                zone
-            } else {
-                &world_state.zones[world_state.zones.len() - 2]
-            };
-            let mut mu_visc = PA2BA * z.pressure * z.creep();
-            if zone.mass_ice > 0.
-                && zone.mass_ammonia_solid + zone.mass_ammonia_solid >= 0.01 * zone.mass_ice
-                && zone.temp > 140.
-            {
-                mu_visc = (mu_visc
-                    * if z.temp < 176. {
-                        1.0e-2
-                    } else if z.temp < 250. {
-                        1.0e-6
-                    } else if z.temp < 271. {
-                        1.0e-14
-                    } else {
-                        1.
-                    })
-                .max(1.0e3);
+        let mut m_rock_new = vec![0.0; n_zones];
+        let mut m_h2os_new = vec![0.0; n_zones];
+        let mut m_adhs_new = vec![0.0; n_zones];
+        let mut m_h2ol_new = vec![0.0; n_zones];
+        let mut m_nh3l_new = vec![0.0; n_zones];
+
+        let mut v_rock_new = vec![0.0; n_zones];
+        let mut v_h2os_new = vec![0.0; n_zones];
+        let mut v_adhs_new = vec![0.0; n_zones];
+        let mut v_h2ol_new = vec![0.0; n_zones];
+        let mut v_nh3l_new = vec![0.0; n_zones];
+
+        let mut vol_cell = vec![0.0; n_zones];
+        for jr in 0..=irdiff {
+            vol_cell[jr] = world_state.zones[jr].volumes().0;
+        }
+
+        let mut jr = 0;
+        let mut ircore = jr;
+
+        for ir in 0..=irdiff {
+            let v_rock_ir = world_state.zones[ir].volumes().1.0;
+            let m_rock_ir = world_state.zones[ir].mass_rock;
+
+            if v_rock_new[jr] >= vol_cell[jr] * (1.0 - x_pores) && v_rock_ir > 0.0 {
+                let q = (v_rock_new[jr] - vol_cell[jr] * (1.0 - x_pores)) / v_rock_ir;
+                v_rock_new[jr] = vol_cell[jr] * (1.0 - x_pores);
+                m_rock_new[jr] -= q * m_rock_ir;
+                vol_cell[jr] *= x_pores;
+                jr = (jr + 1).min(n_zones - 1);
+                ircore = jr;
+                v_rock_new[jr] = q * v_rock_ir;
+                m_rock_new[jr] = q * m_rock_ir;
             }
-            let mu_rigid_rock = (z.x_hydr * E_YOUNG_SERP / (2. * (1. + NU_POISSON_SERP))
-                + (1. - z.x_hydr) * E_YOUNG_OLIV / (2. * (1. + NU_POISSON_OLIV)))
-                / GRAM
-                * CM;
-            let mut mu_rigid =
-                if z.mass_ice + z.mass_ammonia_solid + z.mass_water + z.mass_ammonia_liquid > 0. {
-                    let phi = 1. - zone.fracs().0;
-                    MU_RIGID_ICE
-                        * if phi < 0.3 {
-                            mu_rigid_rock * 0.3_f64.exp()
-                        } else {
-                            1.
-                        }
-                } else {
-                    mu_rigid_rock
-                };
 
-            if z.mass_water + z.mass_ammonia_liquid > 0.9 * z.mass_total {
-                mu_visc = 1.0e2 * PA2BA;
-                mu_rigid = 1.03 * PA2BA;
+            v_rock_new[jr] += v_rock_ir * (1.0 - x_fines);
+            m_rock_new[jr] += m_rock_ir * (1.0 - x_fines);
+
+            if v_rock_new[jr] >= vol_cell[jr] * (1.0 - x_pores) && v_rock_ir > 0.0 {
+                let q = (v_rock_new[jr] - vol_cell[jr] * (1.0 - x_pores)) / v_rock_ir;
+                v_rock_new[jr] = vol_cell[jr] * (1.0 - x_pores);
+                m_rock_new[jr] -= q * m_rock_ir;
+                vol_cell[jr] *= x_pores;
+                jr = (jr + 1).min(n_zones - 1);
+                ircore = jr;
+                v_rock_new[jr] = q * v_rock_ir;
+                m_rock_new[jr] = q * m_rock_ir;
             }
-            let gamma_andr = match alpha_andr {
-                0.2 => 0.918169,
-                0.3 => 0.897471,
-                0.4 => 0.887264,
-                0.5 => 0.886227,
-                _ => exit(0),
-            };
-            // let cond = world_state.omega.abs() < 100. * D_EPS;
-            let cond_i = |n: f64| {
-                if world_state.omega.abs() < 100. * D_EPS {
-                    C0
-                } else {
-                    Complex64::I * n
-                }
-            };
+        }
+        vol_cell[ircore] = (vol_cell[ircore] - v_rock_new[ircore]).max(0.0);
 
-            shearmod[i] = match self.world_spec.rhelogy {
-                crate::input::TidalModel::Maxwell => {
-                    mu_rigid * world_state.omega.powi(2) * mu_visc.powi(2)
-                        / (mu_rigid.powi(2) + (world_state.omega * mu_visc).powi(2))
-                        + cond_i(
-                            mu_rigid.powi(2) * world_state.omega * mu_visc
-                                / (mu_rigid.powi(2) + (world_state.omega * mu_visc).powi(2)),
-                        )
-                }
+        let mut v_ice = vol_cell[ircore];
+        let mut m_fines = 0.0;
+        let mut v_fines = 0.0;
 
-                crate::input::TidalModel::Burgers => {
-                    let mu2 = 0.02 * mu_visc;
-                    let c_1 = 2. / mu_rigid + mu2 / (mu_rigid * mu_visc);
-                    let c_2 = 1. / mu_visc + mu2 * (world_state.omega / mu_rigid).powi(2);
-                    let d_burgers = c_1 * c_2 + c_2 * c_2 + world_state.omega.powi(2);
-                    world_state.omega.powi(2) * (c_1 - mu2 * c_2 / mu_rigid) / d_burgers
-                        + cond_i(
-                            (c_2 + mu2 * world_state.omega.powi(2) * c_1 / mu_rigid) / d_burgers,
-                        )
-                }
+        for ir in 0..=irdiff {
+            if ir >= ircore + 1 {
+                v_ice += world_state.zones[ir].volumes().0;
+            }
+            let v_rock_ir = world_state.zones[ir].volumes().1.0;
+            let m_rock_ir = world_state.zones[ir].mass_rock;
+            m_fines += m_rock_ir * x_fines;
+            v_fines += v_rock_ir * x_fines;
+        }
 
-                crate::input::TidalModel::Andr => {
-                    let beta_andr = 1.0 / (mu_rigid * (mu_visc / mu_rigid).powf(alpha_andr));
-                    let a_andr = mu_rigid.inv()
-                        + world_state.omega.powf(-alpha_andr)
-                            * beta_andr
-                            * (alpha_andr * FRAC_PI_2).cos()
-                            * gamma_andr;
-                    let b_andr = 1.0 / (mu_visc * world_state.omega)
-                        + world_state.omega.powf(-alpha_andr)
-                        + beta_andr * (alpha_andr * FRAC_PI_2).sin();
-                    let d_andr = a_andr.powi(2) + b_andr.powi(2);
-                    a_andr / d_andr + cond_i(b_andr / d_andr)
-                }
+        if v_ice > 0.0 {
+            m_rock_new[ircore] += m_fines * vol_cell[ircore] / v_ice;
+            v_rock_new[ircore] += v_fines * vol_cell[ircore] / v_ice;
+            vol_cell[ircore] = (vol_cell[ircore] - v_fines * vol_cell[ircore] / v_ice).max(0.0);
 
-                crate::input::TidalModel::SunCoop => {
-                    let (voigt_comp_offset, voigt_visc_offset, zeta_andr) = (0.43, 0.02, 1.);
-                    let comp_maxwell = mu_rigid.inv();
-                    let comp_voigt = voigt_comp_offset * comp_maxwell;
-                    let visc_voigt = voigt_visc_offset * mu_visc;
-                    let sine_andr = (alpha_andr * FRAC_PI_2).cos()
-                        + cond_i((alpha_andr * FRAC_PI_2).sin()) * gamma_andr;
-                    let c_comp_maxwell = comp_maxwell + cond_i(1. / (world_state.omega * mu_visc));
-                    let c_comp_sub_andr = comp_maxwell
-                        * (world_state.omega * comp_maxwell * mu_visc * zeta_andr).pow(-alpha_andr)
-                        * sine_andr;
-                    let c_comp_voigt = cond_i(comp_voigt.powi(2) * visc_voigt * world_state.omega)
-                        * (comp_voigt.powi(2)
-                            + visc_voigt.powi(2)
-                            + world_state.omega.powi(2)
-                            + 1.)
-                            .inv();
-
-                    (c_comp_maxwell + c_comp_sub_andr + c_comp_voigt).inv()
-                }
+            for ir in (ircore + 1)..=irdiff {
+                let cell_v = world_state.zones[ir].volumes().0;
+                m_rock_new[ir] += m_fines * cell_v / v_ice;
+                v_rock_new[ir] += v_fines * cell_v / v_ice;
+                vol_cell[ir] = (vol_cell[ir] - v_fines * cell_v / v_ice).max(0.0);
             }
         }
 
-        let y_tide = prop_mtx(
-            &world_state
-                .zones
-                .iter()
-                .map(|x| x.radius)
-                .collect::<Vec<_>>(),
-            &rho,
-            &g_vec,
-            &shearmod,
-            0,
-        );
+        if x_pores > 0.0 {
+            jr = 0;
+        }
 
-        let (e2, e4, e6, e8, e10) = world_state.ecc();
-        let eterm_1 = e10 * (2555911.0 / 122880.0) - e8 * (63949.0 / 2304.0) + e6 * (551.0 / 12.0)
-            - e4 * (101.0 / 4.0)
-            + e2 * 7.0;
-        let eterm_2 = e10 * (-171083.0 / 320.0) + e8 * (339187.0 / 576.0) - e6 * (3847.0 / 12.0)
-            + e4 * (605.0 / 8.0);
-        let eterm_3 =
-            e10 * (368520907.0 / 81920.0) - e8 * (1709915.0 / 768.0) + e6 * (2855.0 / 6.0);
-        let eterm_4 = e10 * (-66268493.0 / 5760.0) + e8 * (2592379.0 / 1152.0);
-        let eterm_5 = e10 * (6576742601.0 / 737280.0);
-        let eterm = match self.world_spec.ecc_model {
-            crate::input::EccModel::E2 => e2,
-            crate::input::EccModel::E10Cpl => eterm_1 + eterm_2 + eterm_3 + eterm_4 + eterm_5,
-            crate::input::EccModel::E10Ctl => {
-                eterm_1 + 2. * eterm_2 + 3. * eterm_3 + 4. * eterm_4 + 5. * eterm_5
+        for ir in 0..=irdiff {
+            let zone = &world_state.zones[ir];
+            let vol_slush_ir = zone.volumes().1.2 + zone.volumes().1.3 + zone.volumes().1.4;
+
+            let volume1 = v_adhs_new[jr] + v_h2ol_new[jr] + v_nh3l_new[jr];
+            if volume1 >= vol_cell[jr] && vol_slush_ir > 0.0 {
+                let q = (volume1 - vol_cell[jr]) / vol_slush_ir;
+                v_h2ol_new[jr] -= q * zone.volumes().1.3;
+                v_nh3l_new[jr] -= q * zone.volumes().1.4;
+                v_adhs_new[jr] -= q * zone.volumes().1.2;
+                m_h2ol_new[jr] -= q * zone.mass_water;
+                m_nh3l_new[jr] -= q * zone.mass_ammonia_liquid;
+                m_adhs_new[jr] -= q * zone.mass_ammonia_solid;
+                vol_cell[jr] = 0.0;
+                jr = (jr + 1).min(n_zones - 1);
+                v_adhs_new[jr] = q * zone.volumes().1.2;
+                v_h2ol_new[jr] = q * zone.volumes().1.3;
+                v_nh3l_new[jr] = q * zone.volumes().1.4;
+                m_adhs_new[jr] = q * zone.mass_ammonia_solid;
+                m_h2ol_new[jr] = q * zone.mass_water;
+                m_nh3l_new[jr] = q * zone.mass_ammonia_liquid;
             }
-        } / 7.;
 
-        let last_radius = world_state.zones.last().map(|z| z.radius).unwrap_or(0.0);
-        for (idx, zone) in world_state.zones.iter_mut().enumerate().skip(1) {
-            let r_out = zone.radius + zone.dr;
-            let x = 2. * y_tide[idx][0] - 6. * y_tide[idx][1];
-            let h_mu = 4. / 3.
-                * (r_out / (K + 4. / 3. * shearmod[idx]).abs()
-                    * (y_tide[idx][2] - (K - 2. / 3. * shearmod[idx]) / r_out * x)
-                        .abs()
-                        .powi(2)
-                    - r_out * ((y_tide[idx][0].conj() - y_tide[idx][1].conj()) / r_out * x).re
-                    + 1. / 3. * x.abs().powi(2)
-                    + 6. * (r_out * y_tide[idx][3].abs() / shearmod[idx].abs()).powi(2)
-                    + 24. * y_tide[idx][1].abs().powi(2));
+            v_adhs_new[jr] += zone.volumes().1.2;
+            v_h2ol_new[jr] += zone.volumes().1.3;
+            v_nh3l_new[jr] += zone.volumes().1.4;
+            m_adhs_new[jr] += zone.mass_ammonia_solid;
+            m_h2ol_new[jr] += zone.mass_water;
+            m_nh3l_new[jr] += zone.mass_ammonia_liquid;
+        }
 
-            let w_tide = if self.world_spec.tidal_heating {
-                zone.volumes().0
-                    * 2.
-                    * world_state.omega.powi(5)
-                    * last_radius.powi(4)
-                    * (eterm + world_state.obl.sin() / 7.)
-                    / r_out.powi(2)
-                    * h_mu
-                    * shearmod[idx].im
-            } else {
-                0.
-            };
-            world_state.w_tide_tot += w_tide;
-            zone.tide_heat_rate = w_tide / 1.0e7;
+        let irice = jr;
+        vol_cell[irice] =
+            (vol_cell[irice] - v_adhs_new[irice] - v_h2ol_new[irice] - v_nh3l_new[irice]).max(0.0);
+
+        for ir in 0..=irdiff {
+            let zone = &world_state.zones[ir];
+            let v_h2os_ir = zone.volumes().1.1;
+
+            if v_h2os_new[jr] >= vol_cell[jr] && v_h2os_ir > 0.0 {
+                let q = (v_h2os_new[jr] - vol_cell[jr]) / v_h2os_ir;
+                v_h2os_new[jr] -= q * v_h2os_ir;
+                m_h2os_new[jr] -= q * zone.mass_ice;
+                vol_cell[jr] = 0.0;
+                jr = (jr + 1).min(n_zones - 1);
+                v_h2os_new[jr] = q * v_h2os_ir;
+                m_h2os_new[jr] = q * zone.mass_ice;
+            }
+
+            v_h2os_new[jr] += v_h2os_ir;
+            m_h2os_new[jr] += zone.mass_ice;
+        }
+
+        for ir in 0..=irdiff {
+            let zone = &mut world_state.zones[ir];
+            zone.mass_rock = m_rock_new[ir];
+            zone.mass_ice = m_h2os_new[ir];
+            zone.mass_ammonia_solid = m_adhs_new[ir];
+            zone.mass_water = m_h2ol_new[ir];
+            zone.mass_ammonia_liquid = m_nh3l_new[ir];
+            zone.mass_total = zone.mass_rock
+                + zone.mass_ice
+                + zone.mass_ammonia_solid
+                + zone.mass_water
+                + zone.mass_ammonia_liquid;
         }
     }
 
-    pub fn fluid_tide(&self, world_state: &mut WorldState, qth: &mut [f64]) {
-        world_state.cesq = 0.0;
-        world_state.til_t = 0.0;
-        world_state.w_fluidtide_tot = 0.0;
+    /// Process rock hydration and dehydration across grid zones and update heats of reaction.
+    pub fn process_hydration(&self, world_state: &mut WorldState, qth: &mut [f64], dtime: f64) {
+        let n_zones = world_state.zones.len();
+        if n_zones == 0 || dtime <= 0.0 {
+            return;
+        }
 
         const F_MEM: f64 = 0.9;
         let rho_rock_th = self.world_spec.rho_rock_th();
@@ -558,114 +551,44 @@ impl IcyDwarfInput {
             return;
         }
 
-        // Find ircore: highest index zone containing rock
+        for zone in world_state.zones.iter_mut() {
+            zone.nusselt = 1.0;
+        }
+
         let mut ircore = 0;
-        for (ir, zone) in world_state.zones.iter().enumerate().rev() {
+        for (ir, zone) in world_state.zones.iter().enumerate() {
             if zone.mass_rock > 0.0 {
                 ircore = ir;
-                break;
             }
         }
+        let irdiff = world_state.irdiff.min(n_zones - 1);
 
-        // Find ir_ocean: top of ocean (liquid water > 0 and mass_rock <= 0)
-        let mut ir_ocean = ircore;
-        for (ir, zone) in world_state.zones.iter().enumerate().rev() {
-            if zone.mass_water > 0.0 && zone.mass_rock <= 0.0 {
-                ir_ocean = ir;
-                break;
-            }
-        }
+        if irdiff > ircore + 2 {
+            let r_in = world_state.zones[ircore].radius;
+            let r_out = world_state.zones[irdiff].radius;
+            let d_shell = (r_out - r_in).max(1.0e-5);
 
-        let m_prim = self.primary_world.mass;
-        let eorb = world_state.e_orb;
-        let obl = world_state.obl;
+            let t_in = world_state.zones[ircore].temp;
+            let t_out = world_state.zones[irdiff].temp;
+            let delta_t = (t_in - t_out).max(0.0);
 
-        if m_prim > 0.0 && (eorb > 0.0 || obl > 0.0) && ir_ocean > ircore {
-            let ocean_mid = (ir_ocean + ircore) / 2;
-            let mut r_ocean = world_state.zones[ocean_mid].radius;
-            if r_ocean <= 0.0 {
-                r_ocean = f64::EPSILON;
-            }
+            if delta_t > 0.0 {
+                let g = GCGS * world_state.zones[irdiff].mass_total / (r_out * r_out);
+                let alpha_ice = 1.0e-4;
+                let kappa_ice = 1.0e-2;
+                let eta_ice = world_state.zones[ircore].creep().max(1.0e13);
 
-            let h_ocean = world_state.zones[ir_ocean].radius - world_state.zones[ircore].radius;
+                let ra = (RHO_H2OS_TH * g * alpha_ice * delta_t * d_shell.powi(3))
+                    / (kappa_ice * eta_ice);
 
-            // Accumulated mass up to ocean_mid
-            let m_acc: f64 = world_state.zones[..=ocean_mid]
-                .iter()
-                .map(|z| z.mass_total)
-                .sum();
-
-            let g_ocean = GCGS * m_acc / (r_ocean * r_ocean);
-
-            let omega_tide = world_state.n_orb;
-            if omega_tide <= 0.0 {
-                return;
-            }
-
-            let cesq = (g_ocean * h_ocean) / (2.0 * omega_tide * r_ocean).powi(2);
-
-            let last_radius = world_state.zones.last().map(|z| z.radius).unwrap_or(1.0);
-            let til_t_scale = 1.0;
-            let ocean_top_r = world_state.zones[ir_ocean].radius;
-            let r_diff = last_radius - ocean_top_r;
-            let til_t = if r_diff.abs() > 1.0e-12 {
-                til_t_scale * last_radius / r_diff
-            } else {
-                0.0
-            };
-
-            world_state.cesq = cesq;
-            world_state.til_t = til_t;
-
-            let tilom = Complex64::new(0.5, 0.0);
-            let mut w_fluidtide = [0.0; 5];
-
-            if eorb > f64::EPSILON {
-                let p0 = self.tropf(cesq, til_t, tilom, 0, 0.5);
-                w_fluidtide[0] = p0.re;
-
-                let p1 = self.tropf(cesq, til_t, -tilom, 2, 3.0);
-                w_fluidtide[1] = p1.re;
-
-                let p2 = self.tropf(cesq, til_t, tilom, 2, 3.0);
-                w_fluidtide[2] = p2.re;
-            }
-
-            if obl > f64::EPSILON {
-                let p3 = self.tropf(cesq, til_t, -tilom, 1, 1.5);
-                w_fluidtide[3] = p3.re;
-
-                let p4 = self.tropf(cesq, til_t, tilom, 1, 1.5);
-                w_fluidtide[4] = p4.re;
-            }
-
-            let mut sum_w_fluidtide = (-1.5 * eorb * 0.5) * (-1.5 * eorb * 0.5) * w_fluidtide[0]
-                + (-1.0 / 8.0 * eorb * 3.0) * (-1.0 / 8.0 * eorb * 3.0) * w_fluidtide[1]
-                + (7.0 / 8.0 * eorb * 3.0) * (7.0 / 8.0 * eorb * 3.0) * w_fluidtide[2]
-                + (0.5 * obl * 1.5) * (0.5 * obl * 1.5) * w_fluidtide[3]
-                + (0.5 * obl * 1.5) * (0.5 * obl * 1.5) * w_fluidtide[4];
-
-            let a_orb = world_state.a_orb;
-            let factor = (GCGS * m_prim / a_orb / r_ocean)
-                * (last_radius / a_orb)
-                * (last_radius / a_orb)
-                * (r_ocean / last_radius)
-                * (r_ocean / last_radius);
-
-            sum_w_fluidtide = sum_w_fluidtide * RHO_H2OL_TH * factor.powi(2) / (2.0 * omega_tide);
-
-            let mut w_fluidtide_tot = 0.0;
-            for ir in ircore..ir_ocean {
-                let vol = world_state.zones[ir].volumes().0;
-                let heating = sum_w_fluidtide * vol;
-                if ir < qth.len() {
-                    qth[ir] += heating;
+                let ra_crit = 1000.0;
+                if ra > ra_crit {
+                    let nu = (ra / ra_crit).powf(0.3).clamp(1.0, 100.0);
+                    for ir in ircore..=irdiff {
+                        world_state.zones[ir].nusselt = nu;
+                    }
                 }
-                w_fluidtide_tot += heating;
             }
-
-            world_state.w_fluidtide_tot = w_fluidtide_tot;
-            world_state.heat_fluidtide += w_fluidtide_tot;
         }
     }
 
@@ -900,8 +823,7 @@ impl ZoneState {
         let vadhs = self.mass_ammonia_solid / crate::planet_system::RHO_ADHS_TH;
         let vh2ol = self.mass_water / crate::planet_system::RHO_H2OL_TH;
         let vnh3l = self.mass_ammonia_liquid / crate::planet_system::RHO_NH3L_TH;
-        let total_vol =
-            4.0 / 3.0 * PI_GREEK * ((self.radius + self.dr).powi(3) - self.radius.powi(3));
+        let total_vol = 4.0 * FRAC_PI_3 * ((self.radius + self.dr).powi(3) - self.radius.powi(3));
 
         let frock = vrock / total_vol;
         let fh2os = vh2os / total_vol;
@@ -971,7 +893,7 @@ pub fn prop_mtx(
 
         let rho_g_r = Complex64::from(rho[ir] * g[ir] * r_val);
         let sm = shearmod[ir];
-        let four_pi_g_rho = Complex64::from(4.0 * PI_GREEK * GCGS * rho[ir]);
+        let four_pi_g_rho = Complex64::from(4.0 * PI * GCGS * rho[ir]);
         let two_pi_g_rho = four_pi_g_rho * 0.5;
 
         let rho_g_r_over_sm = rho_g_r / sm;
@@ -1168,119 +1090,6 @@ fn gauss_jordan(
     let x = lu.solve(b);
     let a_inv = lu.inverse();
     Some((x, a_inv))
-}
-
-/// This struct stores a snapshot of radial zone state loaded from output CSV files.
-#[allow(dead_code)]
-#[derive(Clone, Debug, Default)]
-pub struct ThermalOut {
-    /// Zone radius in centimeters.
-    pub radius_km: f64,
-    /// Temperature in Kelvin.
-    pub temp_kelvin: f64,
-    /// Rock mass in grams.
-    pub mass_rock: f64,
-    /// Water ice mass in grams.
-    pub mass_ice: f64,
-    /// Solid ammonia dihydrate mass in grams.
-    pub mass_ammonia_solid: f64,
-    /// Liquid water mass in grams.
-    pub mass_water: f64,
-    /// Liquid ammonia solution mass in grams.
-    pub mass_ammonia_liquid: f64,
-    /// Nusselt convection number.
-    pub nusselt_num: f64,
-    /// Amorphous ice fraction.
-    pub ice_frac_amorphous: f64,
-    /// Thermal conductivity.
-    pub thermal_cond: f64,
-    /// Degree of rock hydration.
-    pub deg_of_hydr: f64,
-    /// Matrix porosity fraction.
-    pub porosity: f64,
-    /// Core cracking flag.
-    pub crack: bool,
-    /// Tidal heating power rate in erg per second.
-    pub tidal_heating_rate: f64,
-}
-
-impl ThermalOut {
-    /// Parse a line of output text into a [`ThermalOut`] struct.
-    ///
-    /// # Parameters
-    /// - `ln`: The line string to parse.
-    ///
-    /// # Returns
-    /// An optional [`ThermalOut`] struct containing the parsed fields.
-    pub fn from_line(ln: &str) -> Option<Self> {
-        let parts = ln.split_whitespace().collect::<Vec<_>>();
-        let radius_km = parts[0].parse::<f64>().ok()? * KM2CM;
-        Some(Self {
-            radius_km,
-            temp_kelvin: parts[1].parse().ok()?,
-            mass_rock: parts[2].parse().ok()?,
-            mass_ice: parts[3].parse().ok()?,
-            mass_ammonia_solid: parts[4].parse().ok()?,
-            mass_water: parts[5].parse().ok()?,
-            mass_ammonia_liquid: parts[6].parse().ok()?,
-            nusselt_num: parts[7].parse().ok()?,
-            ice_frac_amorphous: parts[8].parse().ok()?,
-            thermal_cond: parts[9].parse().ok()?,
-            deg_of_hydr: parts[10].parse().ok()?,
-            porosity: parts[11].parse().ok()?,
-            crack: parts[12].parse::<u8>().map(|n| n == 1).ok()?,
-            tidal_heating_rate: parts[13].parse().ok()?,
-        })
-    }
-
-    /// Calculate total zone mass in grams.
-    ///
-    /// # Returns
-    /// The total mass sum.
-    pub fn mass_total(&self) -> f64 {
-        self.mass_rock
-            + self.mass_ice
-            + self.mass_ammonia_solid
-            + self.mass_ammonia_liquid
-            + self.mass_water
-    }
-
-    /// Calculate total zone volume and phase volumes.
-    ///
-    /// # Parameters
-    /// - `input`: The [`IcyDwarfInput`] configuration reference.
-    ///
-    /// # Returns
-    /// A tuple containing total volume and a [`Fracs`] struct of phase volumes.
-    #[allow(dead_code)]
-    pub fn vol(&self, input: &IcyDwarfInput) -> (f64, Fracs) {
-        let vol_rock = self.mass_rock
-            / (self.deg_of_hydr * input.world_spec.rho_hydr_th()
-                + (1.0 - self.deg_of_hydr) * input.world_spec.rho_rock_th());
-        let vol_ice = self.mass_ice / RHO_H2OL_TH;
-        let vol_adhs = self.mass_ammonia_solid / RHO_ADHS_TH;
-        let vol_water = self.mass_water / RHO_H2OL_TH;
-        let vol_nh3l = self.mass_ammonia_liquid / RHO_NH3L_TH;
-        (
-            vol_rock + vol_adhs + vol_water + vol_nh3l,
-            Fracs(vol_rock, vol_ice, vol_adhs, vol_water, vol_nh3l),
-        )
-    }
-
-    /// Calculate phase mass fractions for the output zone.
-    ///
-    /// # Returns
-    /// A [`Fracs`] struct containing phase mass fractions.
-    pub fn fracs(&self) -> Fracs {
-        let mass_total = self.mass_total();
-        Fracs(
-            self.mass_rock / mass_total,
-            self.mass_ice / mass_total,
-            self.mass_ammonia_solid / mass_total,
-            self.mass_water / mass_total,
-            self.mass_ammonia_liquid / mass_total,
-        )
-    }
 }
 
 #[cfg(test)]
