@@ -1,5 +1,10 @@
-build: check
+build: check dotfile_init
     cargo build
+
+[unix]
+dotfile_init:
+    mkdir -p "~/.icy_dwarf"
+    cp Phreeqc ~/.icy_dwarf/
 
 [unix]
 check:
@@ -41,4 +46,3 @@ check:
         if (-not (where.exe iphreeqc* 2>$null) -and -not (where.exe libiphreeqc* 2>$null) -and -not (Test-Path 'C:\usr\local\lib\*iphreeqc*')) { Write-Host 'Error: IPHREEQC library is not installed.'; $failed = $true }; \
         if ($failed) { exit 1 } else { Write-Host 'All required dependencies are installed!' }; \
     "
-
