@@ -2,7 +2,10 @@
 
 use std::fs::{self};
 
-use serde::Deserialize;
+use serde::{
+    Deserialize,
+    de::{self},
+};
 use serde_repr::Deserialize_repr;
 pub mod recover;
 
@@ -17,6 +20,31 @@ pub enum QMode {
     ExpDecay,
     /// Exponential change mode.
     ExpChange,
+}
+
+impl TryFrom<u8> for QMode {
+    type Error = u8;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value < 3 {
+            Ok(unsafe { std::mem::transmute(value) })
+        } else {
+            Err(value)
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a str> for QMode {
+    type Error = String;
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        match value.to_ascii_lowercase().trim() {
+            "linear" | "lin" => Ok(Self::Lin),
+            "decay" | "expdecay" | "exponential decay" => Ok(Self::ExpDecay),
+            "expchange" | "exponential change" => Ok(Self::ExpChange),
+            _ => Err(value.to_owned()),
+        }
+    }
 }
 
 /// This enum specifies the orbital eccentricity model.
@@ -117,16 +145,70 @@ pub struct PrimaryWorld {
 #[repr(u8)]
 #[derive(Default, Debug, Clone, Deserialize_repr, PartialEq, Eq)]
 pub enum ChondriteType {
-    /// Carbonaceous Ornans chondrite type.
     #[default]
-    CI,
     /// Carbonaceous Ivuna chondrite type.
+    CI,
+    /// Carbonaceous Ornans chondrite type.
     CO,
+}
+
+impl ChondriteType {
+    fn from_string(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().trim() {
+            "ci" | "chondr_i" | "ivuna" => Some(Self::CI),
+            "co" | "chondr_o" | "orans" => Some(Self::CO),
+            _ => None,
+        }
+    }
+}
+
+/// Helper to deserialize chondrite from boolean or integer in TOML files.
+fn deserialize_chondrite<'de, D>(deserializer: D) -> Result<ChondriteType, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ChondriteInput {
+        Bool(bool),
+        Int(u8),
+        S(String),
+    }
+
+    match ChondriteInput::deserialize(deserializer)? {
+        ChondriteInput::Bool(b) => Ok(if b {
+            ChondriteType::CO
+        } else {
+            ChondriteType::CI
+        }),
+        ChondriteInput::Int(n) => {
+            if n == 0 {
+                Ok(ChondriteType::CI)
+            } else if n == 1 || n == 2 {
+                Ok(ChondriteType::CO)
+            } else {
+                Err(de::Error::custom(format!(
+                    "{} is an invalid chondrite integer code.",
+                    n
+                )))
+            }
+        }
+        ChondriteInput::S(s) => {
+            if let Some(c_type) = ChondriteType::from_string(&s) {
+                Ok(c_type)
+            } else {
+                Err(de::Error::custom(format!(
+                    "{} is an invalid chondrite type.",
+                    &s
+                )))
+            }
+        }
+    }
 }
 
 /// This enum specifies the rheology model used for tidal calculations.
 #[repr(u8)]
-#[derive(Default, Debug, Clone, Deserialize_repr)]
+#[derive(Default, Debug, Clone, Deserialize_repr, PartialEq, Eq)]
 pub enum TidalModel {
     /// Maxwell viscoelastic rheology model.
     #[default]
@@ -139,6 +221,53 @@ pub enum TidalModel {
     SunCoop,
 }
 
+impl TidalModel {
+    fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().trim() {
+            "maxwell" => Some(Self::Maxwell),
+            "burgers" => Some(Self::Burgers),
+            "andr" | "andrade" => Some(Self::Andr),
+            "suncoop" | "sundberg-cooper" => Some(Self::SunCoop),
+            _ => None,
+        }
+    }
+}
+
+fn deserialize_tidal_model<'de, D>(deserializer: D) -> Result<TidalModel, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TidalModelInput {
+        Int(u8),
+        S(String),
+    }
+
+    match TidalModelInput::deserialize(deserializer)? {
+        TidalModelInput::Int(n) => {
+            if n < 2 || n > 5 {
+                Err(de::Error::custom(format!(
+                    "{} is an invalid tidal model integer code.",
+                    &n
+                )))
+            } else {
+                Ok(unsafe { std::mem::transmute(n) }) // this is safe, as both have the same size.
+            }
+        }
+        TidalModelInput::S(s) => {
+            if let Some(model) = TidalModel::from_str(&s) {
+                Ok(model)
+            } else {
+                Err(serde::de::Error::custom(format!(
+                    "{} is an invalid tidal model.",
+                    &s
+                )))
+            }
+        }
+    }
+}
+
 /// This struct defines physical parameters shared across planetary bodies.
 #[allow(dead_code)]
 #[derive(Default, Debug, Clone, Deserialize)]
@@ -148,8 +277,10 @@ pub struct WorldSpec {
     /// The density of hydrated rock material in grams per cubic centimeter.
     pub rho_rock_hydr: f64,
     /// Flag to indicate chondrite composition.
+    #[serde(deserialize_with = "deserialize_chondrite")]
     pub chondrite: ChondriteType,
     /// The tidal rheology model.
+    #[serde(deserialize_with = "deserialize_tidal_model")]
     pub rhelogy: TidalModel,
     /// The eccentricity model.
     pub ecc_model: EccModel,
@@ -360,7 +491,13 @@ pub fn parse_toml(toml_path: &str) -> Option<IcyDwarfInput> {
         return None;
     };
 
-    toml::from_str(&toml_str).ok()
+    match toml::from_str(&toml_str) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            eprintln!("ERROR parsing TOML {}: {}", toml_path, err);
+            None
+        }
+    }
 }
 
 #[cfg(test)]
