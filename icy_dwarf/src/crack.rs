@@ -1,7 +1,7 @@
 //! This module calculates core cracking mechanics and stress intensity profiles.
 
 use std::{
-    f64::consts::TAU,
+    f64::consts::{PI, SQRT_2, TAU},
     fs,
     path::{Path, PathBuf},
 };
@@ -140,13 +140,12 @@ impl IcyDwarfInput {
                 let atp_val = data.atp[delta_t_int][p_int];
 
                 // Calculate K_I
-                output.stress_intensity = (2.0 / (PI_GREEK * atp_val)).sqrt()
-                    * data.integral[integral_line][1]
-                    * e_young
-                    * DELTA_ALPHA
-                    / (TAU * (1.0 - nu_poisson.powi(2)))
-                    * (t_prime - zone.temp).abs()
-                    - zone.pressure * (PI_GREEK * atp_val).sqrt();
+                let n = (PI * atp_val).sqrt();
+                output.stress_intensity =
+                    SQRT_2 / n * data.integral[integral_line][1] * e_young * DELTA_ALPHA
+                        / (TAU * (1.0 - nu_poisson.powi(2)))
+                        * (t_prime - zone.temp).abs()
+                        - zone.pressure * n
             }
         }
 

@@ -91,8 +91,7 @@ impl ZoneState {
         //        = pi (r + dr)^2 - pi r^2
         //        = pi ((r + dr)^2 - r^2)
         //        = pi (r^2 + 2dr + dr^2 - r^2) = pi(2dr + dr^2)
-        let total_vol =
-            4.0 / 3.0 * PI_GREEK * ((self.radius + self.dr).powi(3) - self.radius.powi(3));
+        let total_vol = 4.0 * FRAC_PI_3 * ((self.radius + self.dr).powi(3) - self.radius.powi(3));
         let Fracs(f_rock, f_ice, f_as, f_water, f_al) = self.fracs();
         (
             total_vol,
@@ -296,6 +295,10 @@ pub struct WorldState {
     pub m_cracked_rock: f64,
     /// Total liquid water mass in grams.
     pub m_liq: f64,
+    /// Gravitational binding potential energy in erg units.
+    pub phi: f64,
+    /// Outermost differentiated grid zone index.
+    pub irdiff: usize,
 }
 
 impl IcyDwarfInput {
@@ -425,9 +428,23 @@ impl IcyDwarfInput {
                     til_t: 0.0,
                     m_cracked_rock: 0.0,
                     m_liq: 0.0,
+                    phi: 0.0,
+                    irdiff: 0,
                 }
             })
             .collect();
+
+        // Handle initial differentiation if requested
+        for (idx, world) in self.worlds.iter().enumerate() {
+            if world.start_diff {
+                let n_zones = world_states[idx].zones.len();
+                if n_zones > 0 {
+                    let max_diff = n_zones - 1;
+                    world_states[idx].irdiff = max_diff;
+                    self.separate(&mut world_states[idx], max_diff);
+                }
+            }
+        }
 
         if self.primary_world.mass > 0.0 {
             for s in [
@@ -532,8 +549,8 @@ impl IcyDwarfInput {
                             world.a_orb / KM2CM,
                             world.a_old / KM2CM,
                             world.e_orb,
-                            world.i_orb * 180.0 / PI_GREEK,
-                            world.obl * 180.0 / PI_GREEK,
+                            world.i_orb * 180.0 / PI,
+                            world.obl * 180.0 / PI,
                             world.spin,
                             world.h_old,
                             world.k_old,
@@ -542,7 +559,7 @@ impl IcyDwarfInput {
                                 if world.h_old < 0.0 {
                                     angle += PI * world.k_old.signum();
                                 }
-                                angle * 180.0 / PI_GREEK
+                                angle * 180.0 / PI
                             } else {
                                 0.0
                             },
@@ -675,7 +692,7 @@ impl IcyDwarfInput {
 #[allow(dead_code)]
 impl IcyWorld {
     pub fn mass(&self) -> f64 {
-        self.planetary_dens * 4.0 / 3.0 * PI_GREEK * self.planetary_rad.powi(3)
+        self.planetary_dens * 4.0 * FRAC_PI_3 * self.planetary_rad.powi(3)
     }
 
     pub fn rho_ice(&self) -> f64 {

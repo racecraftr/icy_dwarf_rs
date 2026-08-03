@@ -1,10 +1,11 @@
 use crate::consts::{BAR, G, KELVIN, KM, KM2CM, RHO_ADHS, RHO_H2OL, RHO_H2OS, RHO_NH3L};
 use crate::input::Fracs;
 use crate::traits::float_traits::FloatExt;
-use crate::{consts::GRAM, input::IcyDwarfInput, thermal::ThermalOut};
+use crate::{consts::GRAM, input::IcyDwarfInput, thermal::thermal_out::ThermalOut};
 use extendr_api::prelude::*;
 use itertools::Itertools;
 use num::traits::Inv;
+use std::f64::consts::FRAC_2_SQRT_PI;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
@@ -100,15 +101,10 @@ impl IcyDwarfInput {
         let temp = thermal_out[r_seafloor_idx][t].temp_kelvin;
 
         // Find the base of the crust r_diff
-        let mut r_diff = nr - 2;
-        let mut r = nr - 2;
-        while r > r_seafloor_idx {
-            if thermal_out[r][t].mass_rock <= 0.0 {
-                r_diff = r;
-                break;
-            }
-            r -= 1;
-        }
+        let r_diff = (r_seafloor_idx + 1..=nr - 2)
+            .rev()
+            .find(|&r| thermal_out[r][t].mass_rock <= 0.)
+            .unwrap_or(nr - 2);
 
         let r_hydrostatic = (r_seafloor_idx as f64
             + RHO_H2OS / RHO_H2OL * (r_diff as f64 - r_seafloor_idx as f64))
@@ -330,16 +326,12 @@ impl IcyDwarfInput {
                 };
 
                 let r_m_stress = thermal_out[abs_r][t].radius_km / 100.0;
-                let depth_m = r as f64 * r_p / nr as f64 * crate::consts::KM;
+                let depth_m = r as f64 * r_p / nr as f64 * KM;
 
-                x_vap_table[r][4] = -(x_vap_table[r][3] - crate::consts::RHO_H2OS)
-                    * 2.0
-                    * crate::consts::G
-                    * m_inf_stress
-                    * crate::consts::GRAM
-                    / (r_m_stress * r_m_stress)
-                    * depth_m.powf(1.5)
-                    / crate::consts::PI_GREEK.sqrt();
+                x_vap_table[r][4] =
+                    -(x_vap_table[r][3] - RHO_H2OS) * FRAC_2_SQRT_PI * G * m_inf_stress * GRAM
+                        / (r_m_stress * r_m_stress)
+                        * depth_m.powf(1.5);
 
                 let threshold = if abs_r <= r_diff {
                     K_IC_ICE

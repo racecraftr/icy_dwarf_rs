@@ -1,6 +1,9 @@
 //! This module calculates orbital mechanics, tidal migration, and mean-motion resonances.
 
-use std::path::PathBuf;
+use std::{
+    f64::consts::{SQRT_2, TAU},
+    path::PathBuf,
+};
 
 use crate::{
     GLOBAL_ARGS,
@@ -454,9 +457,7 @@ impl IcyDwarfInput {
                 let x_p = world_states[world_idx].i_orb.cos();
                 let x_m = world_states[world_idx].obl.cos();
 
-                let n_prim = (2.0 * std::f64::consts::PI
-                    / (self.primary_world.spin_period * 3600.0))
-                    .max(0.);
+                let n_prim = (TAU / (self.primary_world.spin_period * 3600.0)).max(0.);
 
                 let eta_p = if aorb_im > 0.0 && norb_im > 0.0 && term_e > 0.0 {
                     (m_prim + mass_moon) / (m_prim * mass_moon) * i_p * n_prim
@@ -798,7 +799,7 @@ impl IcyDwarfInput {
         }
 
         let dk = (3. * (j + 1.).powi(2)
-            / (2_f64.sqrt() * self.worlds[inner].mass() / self.primary_world.mass * ck))
+            / (SQRT_2 * self.worlds[inner].mass() / self.primary_world.mass * ck))
             .powf(2. / 3.);
         let r = dk * world_states[inner].e_orb.powi(2);
 

@@ -14,7 +14,7 @@ use crate::{
     GLOBAL_ARGS,
     consts::{G, GRAM, KM, KM2CM, M_EARTH, MPA, R_EARTH},
     input::{Fracs, IcyDwarfInput},
-    thermal::ThermalOut,
+    thermal::thermal_out::ThermalOut,
     traits::float_traits::FloatExt,
 };
 

@@ -2,6 +2,7 @@
 
 use crate::consts::*;
 use extendr_api::prelude::*;
+use std::f64::consts::{PI, SQRT_2, TAU};
 use std::path::PathBuf;
 use std::{
     fs::{self, File},
@@ -93,14 +94,15 @@ pub fn a_tp(data_dir: &str, warnings: bool) -> Result<(), String> {
                 let a_var = A_VAR_MAX / INT_SIZE as f64 * (j + 1) as f64;
                 k_i[j][0] = a_var;
 
-                let term_intensity = (2.0 / (PI_GREEK * a_var)).sqrt();
+                let n = (PI * a_var).sqrt();
+                let term_intensity = SQRT_2 / n;
                 let e_young_avg = 0.5 * (E_YOUNG_OLIV + E_YOUNG_SERP);
                 let nu_poisson_avg = 0.5 * (NU_POISSON_OLIV + NU_POISSON_SERP);
-                let den = 2.0 * PI_GREEK * (1.0 - nu_poisson_avg * nu_poisson_avg);
+                let den = TAU * (1.0 - nu_poisson_avg * nu_poisson_avg);
 
                 k_i[j][1] = term_intensity * integral[j][1] * e_young_avg * DELTA_ALPHA / den
                     * delta_t
-                    - p_pa * (PI_GREEK * a_var).sqrt();
+                    - p_pa * n;
             }
             let (_k_i_max, k_i_max_a) =
                 k_i.iter().fold((k_i[0][1], k_i[0][0]), |(k_i, k_i_a), v| {
@@ -420,17 +422,17 @@ mod crack_table_tests {
         // Since R/CHNOSZ is not thread-safe and must be initialized on a single thread,
         // we run all R-based table generation tests sequentially within a single test.
         let test_dir = "./target/test_crack_data_chnosz";
-        let _ = fs::remove_dir_all(test_dir);
+        let mut test_data_dir = test_dir.to_string();
+        test_data_dir.push_str("/Data/");
 
         // 1. Test water table generation
-        // The R code successfully runs!
-        let res_water = crack_water_chnosz(test_dir, false);
+        let res_water = crack_water_chnosz(&test_data_dir, false);
         assert!(res_water.is_ok());
         assert!(Path::new(test_dir).join("Data/Crack_alpha.txt").exists());
         assert!(Path::new(test_dir).join("Data/Crack_beta.txt").exists());
 
         // 2. Test species table generation
-        let res_species = crack_species_chnosz(test_dir, false);
+        let res_species = crack_species_chnosz(&test_data_dir, false);
         assert!(res_species.is_ok());
         assert!(Path::new(test_dir).join("Data/Crack_silica.txt").exists());
         assert!(
