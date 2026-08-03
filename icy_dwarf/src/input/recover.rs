@@ -4,7 +4,7 @@ use crate::{
     consts::*,
     input::{Fracs, IcyDwarfInput},
     planet_system::{WorldState, ZoneState, heat_ice, heat_rock},
-    thermal::ThermalOut,
+    thermal::thermal_out::ThermalOut,
     traits::float_traits::FloatExt,
 };
 use std::fs;
@@ -239,6 +239,8 @@ impl IcyDwarfInput {
                 til_t: 0.0,
                 m_cracked_rock: 0.0,
                 m_liq: 0.0,
+                phi: 0.0,
+                irdiff: 0,
             });
         }
 
