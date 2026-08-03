@@ -393,6 +393,166 @@ impl IcyDwarfInput {
         world_state.til_t = 0.0;
         world_state.w_fluidtide_tot = 0.0;
 
+        const F_MEM: f64 = 0.9;
+        let rho_rock_th = self.world_spec.rho_rock_th();
+        let rho_hydr_th = self.world_spec.rho_hydr_th();
+        let rho_h2ol_th = RHO_H2OL_TH;
+
+        let mut dont_dehydrate = vec![false; n_zones];
+
+        let mut ircore = 0;
+        for (ir, zone) in world_state.zones.iter().enumerate() {
+            if zone.mass_rock > 0.0 {
+                ircore = ir;
+            }
+        }
+
+        let mut ircrack = n_zones;
+        for ir in (0..=ircore).rev() {
+            if world_state.zones[ir].crack > 0.0 {
+                ircrack = ir;
+            } else {
+                break;
+            }
+        }
+
+        if ircore > 0 && ircrack < ircore {
+            for ir in (ircrack..ircore).rev() {
+                let temp = world_state.zones[ir].temp;
+                let x_hydr_old = world_state.zones[ir].x_hydr;
+
+                if temp < crate::consts::TDEHYDR_MAX && x_hydr_old <= 0.99 {
+                    let target_x = if temp < crate::consts::TDEHYDR_MIN {
+                        1.0
+                    } else {
+                        1.0 - (temp - crate::consts::TDEHYDR_MIN)
+                            / (crate::consts::TDEHYDR_MAX - crate::consts::TDEHYDR_MIN)
+                    };
+                    let new_x =
+                        (F_MEM * x_hydr_old + (1.0 - F_MEM) * target_x).clamp(x_hydr_old, 1.0);
+
+                    if new_x > x_hydr_old {
+                        world_state.zones[ir].x_hydr = new_x;
+                        dont_dehydrate[ir] = true;
+
+                        let v_moved = (world_state.zones[ir].mass_rock
+                            / (new_x * rho_hydr_th + (1.0 - new_x) * rho_rock_th)
+                            - world_state.zones[ir].mass_rock
+                                / (x_hydr_old * rho_hydr_th + (1.0 - x_hydr_old) * rho_rock_th))
+                            .min(world_state.zones[ir].mass_water / rho_h2ol_th)
+                            .max(0.0);
+
+                        let m_water_trans = v_moved * rho_h2ol_th;
+                        world_state.zones[ir].mass_water =
+                            (world_state.zones[ir].mass_water - m_water_trans).max(0.0);
+                        world_state.zones[ir].mass_rock += m_water_trans;
+                    }
+                }
+            }
+        }
+
+        for ir in 0..=ircore {
+            if ir >= n_zones {
+                break;
+            }
+            if dont_dehydrate[ir] {
+                continue;
+            }
+
+            let temp = world_state.zones[ir].temp;
+            let x_hydr_old = world_state.zones[ir].x_hydr;
+
+            if temp > TDEHYDR_MIN && x_hydr_old >= 0.01 {
+                let target_x = if temp >= crate::consts::TDEHYDR_MAX {
+                    0.0
+                } else {
+                    1.0 - (temp - crate::consts::TDEHYDR_MIN)
+                        / (crate::consts::TDEHYDR_MAX - crate::consts::TDEHYDR_MIN)
+                };
+                let new_x = (F_MEM * x_hydr_old + (1.0 - F_MEM) * target_x).clamp(0.0, x_hydr_old);
+
+                if new_x < x_hydr_old {
+                    world_state.zones[ir].x_hydr = new_x;
+
+                    let d_vol = world_state.zones[ir].volumes().0;
+                    let v_rock_new = world_state.zones[ir].mass_rock
+                        / (new_x * rho_hydr_th + (1.0 - new_x) * rho_rock_th);
+                    let v_h2ol_new = (d_vol - v_rock_new).max(0.0);
+
+                    let m_h2ol_new = v_h2ol_new * rho_h2ol_th;
+                    world_state.zones[ir].mass_water += m_h2ol_new;
+                    world_state.zones[ir].mass_rock = (world_state.zones[ir].mass_total
+                        - world_state.zones[ir].mass_water)
+                        .max(0.0);
+                }
+            }
+        }
+
+        for (ir, zone) in world_state.zones.iter_mut().enumerate() {
+            let delta_x = zone.x_hydr - zone.x_hydr_old;
+            if delta_x.abs() > 1.0e-10 {
+                let q_rxn = delta_x * zone.mass_rock * crate::consts::HHYDR / dtime;
+                if ir < qth.len() {
+                    qth[ir] += q_rxn;
+                }
+                if delta_x > 0.0 {
+                    world_state.heat_serp += q_rxn;
+                } else {
+                    world_state.heat_dehydr += -q_rxn;
+                }
+            }
+            zone.x_hydr_old = zone.x_hydr;
+        }
+    }
+
+    /// Calculate gravitational potential energy release during differentiation.
+    pub fn gravitational_heating(&self, world_state: &mut WorldState, qth: &mut [f64], dtime: f64) {
+        let n_zones = world_state.zones.len();
+        if n_zones == 0 || dtime <= 0.0 {
+            return;
+        }
+
+        let phi_old = world_state.phi;
+        let mut phi =
+            0.6 * GCGS * world_state.zones[0].mass_total.powi(2) / world_state.zones[0].radius;
+
+        let mut m_acc = world_state.zones[0].mass_total;
+        for ir in 1..n_zones {
+            let r_prev = world_state.zones[ir - 1].radius;
+            let r_curr = world_state.zones[ir].radius;
+            let r_avg = (r_prev + r_curr) * 0.5;
+            phi += GCGS * m_acc * world_state.zones[ir].mass_total / r_avg;
+            m_acc += world_state.zones[ir].mass_total;
+        }
+
+        if (phi - phi_old).abs() < 1.0e-5 * phi_old {
+            phi = phi_old;
+        }
+        world_state.phi = phi;
+
+        let irdiff = world_state.irdiff;
+        if irdiff > 0 && irdiff < n_zones && phi > phi_old {
+            let total_diff_vol: f64 = world_state.zones[..=irdiff]
+                .iter()
+                .map(|z| z.volumes().0)
+                .sum();
+
+            if total_diff_vol > 0.0 {
+                let delta_phi = (phi - phi_old) / dtime;
+                for ir in 0..=irdiff {
+                    let zone_vol = world_state.zones[ir].volumes().0;
+                    let heat_rate = delta_phi * (zone_vol / total_diff_vol);
+                    if ir < qth.len() {
+                        qth[ir] += heat_rate;
+                    }
+                    world_state.heat_grav += heat_rate;
+                }
+            }
+        }
+    }
+
+    /// Calculate convective heat transport (hydrothermal, ocean mud, subsolidus ice shell).
+    pub fn convect(&self, world_state: &mut WorldState) {
         let n_zones = world_state.zones.len();
         if n_zones == 0 {
             return;
