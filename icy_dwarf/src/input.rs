@@ -47,6 +47,30 @@ impl<'a> TryFrom<&'a str> for QMode {
     }
 }
 
+fn deserialize_qmode<'de, D>(deserializer: D) -> Result<QMode, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum QModeInput {
+        Int(u8),
+        S(String),
+    }
+
+    match QModeInput::deserialize(deserializer)? {
+        QModeInput::Int(n) => QMode::try_from(n).map_err(|v| {
+            de::Error::custom(format!(
+                "{} is not a valid eccentricity model integer code",
+                v
+            ))
+        }),
+        QModeInput::S(s) => {
+            QMode::try_from(s.as_ref()).map_err(|s| de::Error::custom(format!("{}", s)))
+        }
+    }
+}
+
 /// This enum specifies the orbital eccentricity model.
 #[repr(u8)]
 #[derive(Default, Debug, Clone, Deserialize_repr)]
@@ -58,6 +82,55 @@ pub enum EccModel {
     E10Cpl,
     /// Constant time-lag tenth-order eccentricity model.
     E10Ctl,
+}
+
+impl TryFrom<u8> for EccModel {
+    type Error = u8;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value < 3 {
+            Ok(unsafe { std::mem::transmute(value) })
+        } else {
+            Err(value)
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a str> for EccModel {
+    type Error = String;
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        match value.to_ascii_lowercase().trim() {
+            "second-order" | "e2" | "ecc2" => Ok(Self::E2),
+            "coupled tenth-order" | "e10cpl" | "ecc10_cpl" => Ok(Self::E10Cpl),
+            "time-lag tenth-order" | "e10ctl" | "ecc10_ctl" => Ok(Self::E10Ctl),
+            _ => Err(value.to_owned()),
+        }
+    }
+}
+
+fn deserialize_ecc_model<'de, D>(deserializer: D) -> Result<EccModel, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum EccModelInput {
+        Int(u8),
+        S(String),
+    }
+
+    match EccModelInput::deserialize(deserializer)? {
+        EccModelInput::Int(n) => EccModel::try_from(n).map_err(|v| {
+            de::Error::custom(format!(
+                "{} is not a valid eccentricity model integer code",
+                v
+            ))
+        }),
+        EccModelInput::S(s) => {
+            EccModel::try_from(s.as_ref()).map_err(|s| de::Error::custom(format!("{}", s)))
+        }
+    }
 }
 
 /// This struct holds configuration flags for simulation logging and recovery.
@@ -102,6 +175,7 @@ pub struct TidalQ {
     /// The current value of the tidal dissipation factor.
     pub today: f64,
     /// The mode of dissipation calculation.
+    #[serde(deserialize_with = "deserialize_qmode")]
     pub mode: QMode,
 }
 
@@ -283,6 +357,7 @@ pub struct WorldSpec {
     #[serde(deserialize_with = "deserialize_tidal_model")]
     pub rhelogy: TidalModel,
     /// The eccentricity model.
+    #[serde(deserialize_with = "deserialize_ecc_model")]
     pub ecc_model: EccModel,
     /// Flag to enable tidal heating calculation.
     pub tidal_heating: bool,
