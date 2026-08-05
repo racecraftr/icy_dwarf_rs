@@ -40,7 +40,7 @@ impl IcyDwarfInput {
         let imantle = planmat_index(&planmat_db, db_mantle)?;
 
         let nr = self.grid.n_zones;
-        let time_step = self.grid.time_step as usize;
+        let time_step = self.grid.output_time_step().saturating_sub(1);
         let rho_hydr = self.world_spec.rho_rock_hydr;
         let rho_dry = self.world_spec.rho_rock_dry;
 

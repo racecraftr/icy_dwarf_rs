@@ -86,6 +86,16 @@ impl IcyDwarfInput {
     pub fn cryolava(&self, thermal_out: &[Vec<ThermalOut>], path: &str) -> Result<(), String> {
         let t = self.t_cryo() as usize;
 
+        if thermal_out.is_empty() || thermal_out[0].is_empty() {
+            return Err("Thermal output data is empty".to_string());
+        }
+        if t >= thermal_out[0].len() {
+            println!("Icy Dwarf: t_cryolava ({}) > total time of sim ({})", t, thermal_out[0].len() - 1);
+            return Err("t_cryolava > total time of sim".to_string());
+        }
+
+        println!("Calculating gas-driven exsolution at t={}...", t);
+
         let m_liq = self.calculate_mass_liquid(thermal_out, t);
         if m_liq <= 0.0 {
             println!("Cryolava: No liquid at t_cryolava={}", t);

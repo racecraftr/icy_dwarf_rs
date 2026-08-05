@@ -168,7 +168,7 @@ impl IcyDwarfInput {
                     &n_vec,
                 )
                 .iter()
-                .map(|n| Complex64::from(n)),
+                .map(Complex64::from),
             )
         };
 
@@ -323,8 +323,7 @@ fn globe_time_average(s_coefs: &[C], t_coefs: &[C], s: usize, n_vec: &[usize]) -
         .map(|(&sc, &tc, &n)| {
             let sc_c = sc.conj();
             let tc_c = tc.conj();
-            (sc * tc_c + sc_c * tc).re / (2. * n as f64 + 1.)
-                * ratio_factorials(n as usize, s as usize)
+            (sc * tc_c + sc_c * tc).re / (2. * n as f64 + 1.) * ratio_factorials(n, s)
         })
         .collect()
 }

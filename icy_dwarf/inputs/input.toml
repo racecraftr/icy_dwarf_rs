@@ -1,4 +1,4 @@
-# example input. 
+# example input.
 
 # this defines a table.
 # it has a key-value pair.
@@ -8,9 +8,9 @@ recover = false
 
 [grid]
 n_zones = 200  # number of grid zones. also, comments are supported! wow!
-time_step = 100
+time_step = 1000000
 speedup = 1000
-time_total = 4600
+time_total = 100
 output_every = 10
 
 [primary_world]

@@ -4,3 +4,4 @@ icy_dwarf_plot/target/*
 .zed/settings.json
 icy_dwarf/config.toml
 icy_dwarf/Data/
+icy_dwarf/Outputs/

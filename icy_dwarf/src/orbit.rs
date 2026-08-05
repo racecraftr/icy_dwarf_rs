@@ -325,7 +325,7 @@ impl IcyDwarfInput {
                 w_im.cr_epep_old = cr_epep;
                 w_i.cr_epep_old = cr_epep;
 
-                if (0. <= e0 && e0 <= 1.) || (0. <= e1 && e1 <= 1.) {
+                if (0. ..=1.).contains(&e0) || (0. ..=1.).contains(&e1) {
                     use std::fs::OpenOptions;
                     use std::io::Write;
                     if let Ok(mut res_file) = {

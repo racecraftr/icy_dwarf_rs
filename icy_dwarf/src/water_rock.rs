@@ -1,77 +1,237 @@
 //! This module simulates water-rock interactions and geochemical leaching using PHREEQC and CHNOSZ.
 
 use crate::consts::{KELVIN, NAQ, NELTS, NGASES, NMINGAS, NVAR};
+use crate::input::SubroutinesGeo;
 use extendr_api::prelude::*;
-use std::fs;
+use std::ffi::CString;
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
-/// Simulate water-rock interactions using PHREEQC and return the leached potassium mass fraction.
+/// Explore the geochemistry of water-rock interactions using PHREEQC and CHNOSZ
+/// across a specified parameter grid (temperature, pressure, pe, and water-rock ratio).
 ///
 /// # Parameters
-/// - `path`: The base directory path string.
-/// - `t`: The temperature in Kelvin.
-/// - `p`: The pressure in bars.
-/// - `pe`: The electron activity value.
-/// - `wr`: The water-to-rock mass ratio.
-///
-/// # Returns
-/// The fraction of potassium leached from the rock material.
-pub fn water_rock(path: &str, t: f64, p: f64, pe: f64, mut wr: f64) -> Result<f64, String> {
+/// - `base_dir`: Base directory path for PHREEQC files (`PathBuf`).
+/// - `output_dir`: Output directory path (`PathBuf`).
+/// - `geo`: Geochemical parameter ranges.
+pub fn param_exploration(
+    base_dir: PathBuf,
+    output_dir: PathBuf,
+    geo: &SubroutinesGeo,
+) -> Result<(), String> {
+    let pe_min = 0.25 * geo.pe.min;
+    let pe_max = 0.25 * geo.pe.max;
+    let pe_step = 0.25 * geo.pe.step;
+
+    let n_temp_iter = if geo.temp.step > 0.0 {
+        ((geo.temp.max - geo.temp.min) / geo.temp.step).floor() as usize
+    } else {
+        0
+    };
+
+    let n_pressure_iter = if geo.pressure.step > 0.0 {
+        ((geo.pressure.max - geo.pressure.min) / geo.pressure.step).floor() as usize
+    } else {
+        0
+    };
+
+    let n_pe_iter = if pe_step > 0.0 {
+        ((pe_max - pe_min) / pe_step).floor() as usize
+    } else {
+        0
+    };
+
+    let n_wr_iter = if geo.wr_ratio.step > 1.0 {
+        ((geo.wr_ratio.max.ln() - geo.wr_ratio.min.ln()) / geo.wr_ratio.step.ln()).ceil() as usize
+    } else {
+        0
+    };
+
+    let phreeqc_dir = if base_dir.join("Phreeqc").exists() {
+        base_dir.join("Phreeqc")
+    } else if base_dir.join("PHREEQC-3.1.2").exists() {
+        base_dir.join("PHREEQC-3.1.2")
+    } else if PathBuf::from("Phreeqc").exists() {
+        PathBuf::from("Phreeqc")
+    } else {
+        PathBuf::from("PHREEQC-3.1.2")
+    };
+
+    let dbase = phreeqc_dir.join("core10.dat");
+    let infile = phreeqc_dir.join("io").join("PHREEQCinput");
+    let solfile = phreeqc_dir.join("io").join("Sol");
+
+    let outfile = output_dir.join("ParamExploration.txt");
+    create_output(&outfile)?;
+
+    init_chnosz()?;
+
+    let mut simdata = vec![vec![0.0; NVAR as usize]; n_pe_iter + 1];
+
+    for i_pressure in 0..=n_pressure_iter {
+        let mut p = geo.pressure.min + geo.pressure.step * (i_pressure as f64);
+
+        for i_temp in 0..=n_temp_iter {
+            let mut t = geo.temp.min + geo.temp.step * (i_temp as f64);
+
+            if t == 0.0 {
+                t = 0.01; // PHREEQC crashes at 0 celsius
+            }
+            if p == 0.0 {
+                p = 1.0; // 1 bar minimum
+            }
+
+            let log_quartz = get_chnosz_log_k("quartz", "cr", t, p)?;
+            let log_magnetite = get_chnosz_log_k("magnetite", "cr", t, p)?;
+            let log_fayalite = get_chnosz_log_k("fayalite", "cr", t, p)?;
+            let log_o2 = get_chnosz_log_k("O2", "g", t, p)?;
+
+            let log_h_plus = get_chnosz_log_k("H+", "aq", t, p)?;
+            let log_e_minus = get_chnosz_log_k("e-", "aq", t, p)?;
+            let log_h2o = get_chnosz_log_k("H2O", "liq", t, p)?;
+
+            let logf_o2 = -3.0 * log_quartz - 2.0 * log_magnetite + 3.0 * log_fayalite + log_o2;
+            let log_ko2_h2o = -4.0 * log_h_plus - 4.0 * log_e_minus - log_o2 + 2.0 * log_h2o;
+
+            for i_wr in 0..=n_wr_iter {
+                let wr = geo.wr_ratio.max / geo.wr_ratio.step.powi(i_wr as i32);
+
+                println!(
+                    "P={} ({} of {}) T={} ({} of {}) W:R={} ({} of {}), parallel calculations over {} values of pe",
+                    p,
+                    i_pressure + 1,
+                    n_pressure_iter + 1,
+                    t,
+                    i_temp + 1,
+                    n_temp_iter + 1,
+                    wr,
+                    i_wr + 1,
+                    n_wr_iter + 1,
+                    n_pe_iter + 1
+                );
+
+                for row in simdata.iter_mut() {
+                    row.fill(0.0);
+                }
+
+                let tempinput = phreeqc_dir.join("io").join("PHREEQCinput_temp");
+
+                for ipe in 0..=n_pe_iter {
+                    let pe = pe_min + pe_step * (ipe as f64);
+
+                    let mut ph = 7.0; // Neutral PH
+                    let mut fmq = -ph + 0.25 * (logf_o2 + log_ko2_h2o);
+                    println!("FMQ pe is {} at T={} C, P={} bar, and pH {}", fmq, t, p, ph);
+
+                    write_phreeqc_input(&solfile, t, p, ph, 4.0 * pe, fmq + pe, wr, &tempinput)?;
+
+                    let instance = unsafe { CreateIPhreeqc() };
+                    if instance < 0 {
+                        return Err("Failed to create IPhreeqc instance".to_string());
+                    }
+
+                    let c_dbase = CString::new(dbase.to_string_lossy().as_bytes())
+                        .map_err(|e| e.to_string())?;
+                    let c_tempinput = CString::new(tempinput.to_string_lossy().as_bytes())
+                        .map_err(|e| e.to_string())?;
+
+                    unsafe {
+                        if LoadDatabase(instance, c_dbase.as_ptr()) != 0 {
+                            OutputErrorString(instance);
+                            DestroyIPhreeqc(instance);
+                            return Err("Failed to load PHREEQC database".to_string());
+                        }
+                        SetSelectedOutputFileOn(instance, 1);
+                        if RunFile(instance, c_tempinput.as_ptr()) != 0 {
+                            OutputErrorString(instance);
+                            DestroyIPhreeqc(instance);
+                            return Err("Failed to run PHREEQC solution file".to_string());
+                        }
+                    }
+
+                    extract_ph(instance, &mut ph);
+                    extract_write_sol(instance, &mut simdata[ipe]);
+                    unsafe { DestroyIPhreeqc(instance) };
+
+                    fmq = -ph + 0.25 * (logf_o2 + log_ko2_h2o);
+                    println!("FMQ pe is {} at T={} C, P={} bar, and pH {}", fmq, t, p, ph);
+
+                    write_phreeqc_input(&infile, t, p, ph, 4.0 * pe, fmq + pe, wr, &tempinput)?;
+
+                    let instance2 = unsafe { CreateIPhreeqc() };
+                    if instance2 < 0 {
+                        return Err("Failed to create IPhreeqc instance".to_string());
+                    }
+
+                    unsafe {
+                        if LoadDatabase(instance2, c_dbase.as_ptr()) != 0 {
+                            OutputErrorString(instance2);
+                            DestroyIPhreeqc(instance2);
+                            return Err("Failed to load PHREEQC database".to_string());
+                        }
+                        SetSelectedOutputFileOn(instance2, 1);
+                        if RunFile(instance2, c_tempinput.as_ptr()) != 0 {
+                            OutputErrorString(instance2);
+                            DestroyIPhreeqc(instance2);
+                            return Err("Failed to run PHREEQC input file".to_string());
+                        }
+                    }
+
+                    simdata[ipe][1] = p;
+                    simdata[ipe][3] = pe * 4.0;
+                    simdata[ipe][4] = fmq;
+                    extract_write(instance2, &mut simdata[ipe]);
+
+                    unsafe { DestroyIPhreeqc(instance2) };
+                }
+
+                for row in &simdata {
+                    append_output(&outfile, row)?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Simulate single water-rock interaction step using PHREEQC and CHNOSZ.
+#[allow(dead_code)]
+pub fn water_rock(base_dir: &Path, t: f64, p: f64, pe: f64, mut wr: f64) -> Result<f64, String> {
     let ph = 7.0;
 
-    let dbase = format!("{}/PHREEQC-3.1.2/core9.dat", path);
-    let infile = format!("{}/io/PHREEQCinput", path);
-    let tempinput = format!("{}/io/PHREEQCinput_temp", path);
+    let phreeqc_dir = if base_dir.join("Phreeqc").exists() {
+        base_dir.join("Phreeqc")
+    } else if base_dir.join("PHREEQC-3.1.2").exists() {
+        base_dir.join("PHREEQC-3.1.2")
+    } else if PathBuf::from("Phreeqc").exists() {
+        PathBuf::from("Phreeqc")
+    } else {
+        PathBuf::from("PHREEQC-3.1.2")
+    };
 
-    let molmass = load_mol_mass(path)?;
+    let dbase = phreeqc_dir.join("core10.dat");
+    let infile = phreeqc_dir.join("io").join("PHREEQCinput");
+    let tempinput = phreeqc_dir.join("io").join("PHREEQCinput_temp");
+
+    let molmass = load_mol_mass(base_dir)?;
 
     let t = t - KELVIN;
 
-    extendr_engine::start_r();
-    let _ = R!(r#"
-        if (!requireNamespace("CHNOSZ", quietly = TRUE)) {
-            stop("CHNOSZ package not installed in R")
-        }
-        library(CHNOSZ, quietly = TRUE)
-        data(thermo)
-        get_log <- function(species, state, T, P) {
-            res <- subcrt(species, state, T = T, P = P)
-            res$out[[1]]$logK[1]
-        }
-    "#)
-    .map_err(|e| format!("Failed to initialize CHNOSZ in R: {:?}", e))?;
+    init_chnosz()?;
 
-    let log_quartz = R!(r#"get_logK("quartz", "cr", {{t}}, {{p}})"#)
-        .map_err(|e| e.to_string())?
-        .as_real()
-        .ok_or_else(|| "Failed to get logK for quartz".to_string())?;
-    let log_magnetite = R!(r#"get_logK("magnetite", "cr", {{t}}, {{p}})"#)
-        .map_err(|e| e.to_string())?
-        .as_real()
-        .ok_or_else(|| "Failed to get logK for magnetite".to_string())?;
-    let log_fayalite = R!(r#"get_logK("fayalite", "cr", {{t}}, {{p}})"#)
-        .map_err(|e| e.to_string())?
-        .as_real()
-        .ok_or_else(|| "Failed to get logK for fayalite".to_string())?;
-    let log_o2 = R!(r#"get_logK("O2", "g", {{t}}, {{p}})"#)
-        .map_err(|e| e.to_string())?
-        .as_real()
-        .ok_or_else(|| "Failed to get logK for O2".to_string())?;
+    let log_quartz = get_chnosz_log_k("quartz", "cr", t, p)?;
+    let log_magnetite = get_chnosz_log_k("magnetite", "cr", t, p)?;
+    let log_fayalite = get_chnosz_log_k("fayalite", "cr", t, p)?;
+    let log_o2 = get_chnosz_log_k("O2", "g", t, p)?;
 
-    let log_h_plus = R!(r#"get_logK("H+", "aq", {{t}}, {{p}})"#)
-        .map_err(|e| e.to_string())?
-        .as_real()
-        .ok_or_else(|| "Failed to get logK for H+".to_string())?;
-    let log_e_minus = R!(r#"get_logK("e-", "aq", {{t}}, {{p}})"#)
-        .map_err(|e| e.to_string())?
-        .as_real()
-        .ok_or_else(|| "Failed to get logK for e-".to_string())?;
-    let log_h2o = R!(r#"get_logK("H2O", "liq", {{t}}, {{p}})"#)
-        .map_err(|e| e.to_string())?
-        .as_real()
-        .ok_or_else(|| "Failed to get logK for H2O".to_string())?;
+    let log_h_plus = get_chnosz_log_k("H+", "aq", t, p)?;
+    let log_e_minus = get_chnosz_log_k("e-", "aq", t, p)?;
+    let log_h2o = get_chnosz_log_k("H2O", "liq", t, p)?;
 
-    let logf_o2 = -3.0 * log_quartz - 2.0 * log_magnetite + 3.0 * log_fayalite + 1.0 * log_o2;
-    let log_ko2_h2o = -4.0 * log_h_plus - 4.0 * log_e_minus - 1.0 * log_o2 + 2.0 * log_h2o;
+    let logf_o2 = -3.0 * log_quartz - 2.0 * log_magnetite + 3.0 * log_fayalite + log_o2;
+    let log_ko2_h2o = -4.0 * log_h_plus - 4.0 * log_e_minus - log_o2 + 2.0 * log_h2o;
 
     let fmq = -ph + 0.25 * (logf_o2 + log_ko2_h2o) + pe;
 
@@ -80,15 +240,16 @@ pub fn water_rock(path: &str, t: f64, p: f64, pe: f64, mut wr: f64) -> Result<f6
         wr = 0.5;
     }
 
-    write_phreeqc_input(&infile, t, p, ph, fmq, wr, &tempinput)?;
+    write_phreeqc_input(&infile, t, p, ph, fmq, wr, wr, &tempinput)?;
 
     let instance = unsafe { CreateIPhreeqc() };
     if instance < 0 {
         return Err("Failed to create IPhreeqc instance".to_string());
     }
 
-    let c_dbase = std::ffi::CString::new(dbase).map_err(|e| e.to_string())?;
-    let c_tempinput = std::ffi::CString::new(tempinput).map_err(|e| e.to_string())?;
+    let c_dbase = CString::new(dbase.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
+    let c_tempinput =
+        CString::new(tempinput.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
 
     if unsafe { LoadDatabase(instance, c_dbase.as_ptr()) } != 0 {
         unsafe { OutputErrorString(instance) };
@@ -104,7 +265,7 @@ pub fn water_rock(path: &str, t: f64, p: f64, pe: f64, mut wr: f64) -> Result<f6
         return Err("Failed to run PHREEQC input file".to_string());
     }
 
-    let mut simdata = vec![0.0; 2000];
+    let mut simdata = vec![0.0; NVAR as usize];
     extract_write_sol(instance, &mut simdata);
     extract_write(instance, &mut simdata);
 
@@ -135,7 +296,32 @@ pub fn water_rock(path: &str, t: f64, p: f64, pe: f64, mut wr: f64) -> Result<f6
     Ok(frac_k_leached)
 }
 
-/// This enum defines variant types for IPhreeqc C FFI data exchange.
+fn init_chnosz() -> Result<(), String> {
+    extendr_engine::start_r();
+    let _ = R!(r#"
+        if (!requireNamespace("CHNOSZ", quietly = TRUE)) {
+            stop("CHNOSZ package not installed in R")
+        }
+        library(CHNOSZ, quietly = TRUE)
+        data(thermo)
+        get_logK <- function(species, state, T, P) {
+            res <- subcrt(species, state, T = T, P = P)
+            res$out[[1]]$logK[1]
+        }
+    "#)
+    .map_err(|e| format!("Failed to initialize CHNOSZ in R: {:?}", e))?;
+    Ok(())
+}
+
+fn get_chnosz_log_k(species: &str, state: &str, temp: f64, press: f64) -> Result<f64, String> {
+    let val = R!(r#"get_logK({{species}}, {{state}}, {{temp}}, {{press}})"#)
+        .map_err(|e| e.to_string())?
+        .as_real()
+        .ok_or_else(|| format!("Failed to get logK for species {}", species))?;
+    Ok(val)
+}
+
+/// Variant types for IPhreeqc C FFI data exchange.
 #[repr(C)]
 #[allow(dead_code)]
 pub enum VarType {
@@ -151,7 +337,7 @@ pub enum VarType {
     String = 4,
 }
 
-/// This union stores raw variable values for IPhreeqc C FFI data exchange.
+/// Raw variable values for IPhreeqc C FFI data exchange.
 #[repr(C)]
 pub union VarValue {
     /// Long integer value.
@@ -164,7 +350,7 @@ pub union VarValue {
     pub vresult: i32,
 }
 
-/// This struct wraps a variable type and value for IPhreeqc C FFI data exchange.
+/// Variable wrapper for IPhreeqc C FFI data exchange.
 #[repr(C)]
 pub struct Var {
     /// The type of the variable.
@@ -188,6 +374,20 @@ unsafe extern "C" {
         pvar: *mut Var,
     ) -> std::ffi::c_int;
     fn OutputErrorString(id: std::ffi::c_int);
+}
+
+fn extract_ph(instance: i32, ph: &mut f64) {
+    let mut v = Var {
+        vtype: VarType::Empty,
+        val: VarValue { l_val: 0 },
+    };
+    unsafe {
+        VarInit(&mut v);
+        if GetSelectedOutputValue(instance, 1, 1, &mut v) == 0 && matches!(v.vtype, VarType::Double)
+        {
+            *ph = v.val.d_val;
+        }
+    }
 }
 
 fn extract_write_sol(instance: i32, data: &mut [f64]) {
@@ -242,10 +442,10 @@ fn extract_write(instance: i32, data: &mut [f64]) {
         data[36] = get_val(2, 2);
     }
 
-    let limit = data.len();
-    for i in 4.. {
+    let limit = NVAR - 6 - 27;
+    for i in 4..limit {
         let idx = (i + 6 + 27) as usize;
-        if idx >= limit {
+        if idx >= data.len() {
             break;
         }
         let val = get_val(2, i);
@@ -256,16 +456,17 @@ fn extract_write(instance: i32, data: &mut [f64]) {
 /// Load molar mass vectors from the data file.
 ///
 /// # Parameters
-/// - `path`: The base path string pointing to the data folder.
+/// - `data_dir`: The directory path (`&Path`) pointing to the data folder.
 ///
 /// # Returns
 /// A nested vector containing molar masses of chemical species.
-pub fn load_mol_mass(path: &str) -> Result<Vec<Vec<f64>>, String> {
+#[allow(dead_code)]
+pub fn load_mol_mass(data_dir: &Path) -> Result<Vec<Vec<f64>>, String> {
     let mut molmass = vec![vec![0.0; NELTS as usize]; NVAR as usize];
-    let file_path = format!("{}/Data/Molar_masses.txt", path);
+    let file_path = data_dir.join("Molar_masses.txt");
 
     let Ok(content) = fs::read_to_string(&file_path) else {
-        return Err(format!("Could not read {}", file_path));
+        return Err(format!("Could not read {}", file_path.display()));
     };
 
     let mut read_data = vec![];
@@ -283,10 +484,8 @@ pub fn load_mol_mass(path: &str) -> Result<Vec<Vec<f64>>, String> {
         return Err("Molar_masses.txt was empty or invalid".to_string());
     }
 
-    // Shift to positions corresponding to simdata
-    // Gas species
     let ngases = NGASES as usize;
-    let nmingas = NMINGAS as usize; // PINGAS's little-known cousin
+    let nmingas = NMINGAS as usize;
     let naq = NAQ as usize;
 
     for i in 0..ngases {
@@ -296,17 +495,15 @@ pub fn load_mol_mass(path: &str) -> Result<Vec<Vec<f64>>, String> {
         }
     }
 
-    // Solid species
     let mut k = naq - 1;
     for datum in read_data.iter().take(nmingas - ngases) {
         for j in 0..(NELTS as usize) {
             molmass[k][j] = datum[j];
             molmass[k + 1][j] = molmass[k][j];
         }
-        k += 2
+        k += 2;
     }
 
-    // First line
     for j in 0..(NELTS as usize) {
         molmass[0][j] = read_data[0][j];
     }
@@ -315,20 +512,24 @@ pub fn load_mol_mass(path: &str) -> Result<Vec<Vec<f64>>, String> {
 }
 
 fn write_phreeqc_input(
-    template_file: &str,
+    template_file: &Path,
     temp: f64,
     pressure: f64,
     ph: f64,
-    // rel_pe: f64,
+    _rel_pe: f64,
     pe: f64,
     wr: f64,
-    output_file: &str,
+    output_file: &Path,
 ) -> Result<(), String> {
-    let Ok(content) = fs::read_to_string(template_file) else {
-        return Err(format!("Could not read template file {}", template_file));
-    };
+    let content = fs::read_to_string(template_file).map_err(|e| {
+        format!(
+            "Could not read template file {}: {}",
+            template_file.display(),
+            e
+        )
+    })?;
 
-    let mut output = String::new();
+    let mut output = String::with_capacity(content.len() + 128);
     for (i, line) in content.lines().enumerate() {
         let line_no = i + 1;
         if line_no == 5 {
@@ -341,9 +542,9 @@ fn write_phreeqc_input(
             output.push_str(&format!("\t pe \t \t{}\n", pe));
         } else if line_no == 9 {
             output.push_str(&format!("\t -water \t{}\n", wr));
-        } else if line.starts_with("-pres") {
+        } else if line.trim_start().starts_with("-pres") {
             output.push_str(&format!("\t -pressure \t{}\n", pressure));
-        } else if line.starts_with("-temp") {
+        } else if line.trim_start().starts_with("-temp") {
             output.push_str(&format!("\t -temperature \t{}\n", temp));
         } else {
             output.push_str(line);
@@ -351,7 +552,56 @@ fn write_phreeqc_input(
         }
     }
 
-    fs::write(output_file, output).map_err(|e| e.to_string())?;
+    fs::write(output_file, output).map_err(|e| {
+        format!(
+            "Could not write PHREEQC input file {}: {}",
+            output_file.display(),
+            e
+        )
+    })?;
+    Ok(())
+}
+
+/// Create an output file in the output directory if it does not exist.
+pub fn create_output(file_path: &Path) -> Result<(), String> {
+    if let Some(parent) = file_path.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        return Err(format!(
+            "Unable to create folder {}: {}",
+            parent.display(),
+            e
+        ));
+    }
+    if let Err(e) = File::create(file_path) {
+        return Err(format!(
+            "Unable to create file {}: {}",
+            file_path.display(),
+            e
+        ));
+    }
+    Ok(())
+}
+
+/// Append a row of tab-delimited numerical data to an output file.
+pub fn append_output(file_path: &Path, data: &[f64]) -> Result<(), String> {
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(file_path)
+        .map_err(|e| format!("Unable to open file {}: {}", file_path.display(), e))?;
+
+    let mut line = String::with_capacity(data.len() * 12);
+    for (i, val) in data.iter().enumerate() {
+        if i > 0 {
+            line.push('\t');
+        }
+        line.push_str(&format!("{}", val));
+    }
+    line.push('\n');
+
+    file.write_all(line.as_bytes())
+        .map_err(|e| format!("Unable to write to file {}: {}", file_path.display(), e))?;
     Ok(())
 }
 

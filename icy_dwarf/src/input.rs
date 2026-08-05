@@ -2,6 +2,7 @@
 
 use std::fs::{self};
 
+use crate::consts::MYR2SEC;
 use serde::{
     Deserialize,
     de::{self},
@@ -27,7 +28,7 @@ impl TryFrom<u8> for QMode {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         if value < 3 {
-            Ok(unsafe { std::mem::transmute(value) })
+            Ok(unsafe { std::mem::transmute::<u8, QMode>(value) })
         } else {
             Err(value)
         }
@@ -61,13 +62,13 @@ where
     match QModeInput::deserialize(deserializer)? {
         QModeInput::Int(n) => QMode::try_from(n).map_err(|v| {
             de::Error::custom(format!(
-                "{} is not a valid eccentricity model integer code",
+                "{} is not a valid dissipation factor model integer code",
                 v
             ))
         }),
-        QModeInput::S(s) => {
-            QMode::try_from(s.as_ref()).map_err(|s| de::Error::custom(format!("{}", s)))
-        }
+        QModeInput::S(s) => QMode::try_from(s.as_ref()).map_err(|s| {
+            de::Error::custom(format!("{} is not a valid dissipation factor model", s))
+        }),
     }
 }
 
@@ -89,7 +90,7 @@ impl TryFrom<u8> for EccModel {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         if value < 3 {
-            Ok(unsafe { std::mem::transmute(value) })
+            Ok(unsafe { std::mem::transmute::<u8, EccModel>(value) })
         } else {
             Err(value)
         }
@@ -127,9 +128,8 @@ where
                 v
             ))
         }),
-        EccModelInput::S(s) => {
-            EccModel::try_from(s.as_ref()).map_err(|s| de::Error::custom(format!("{}", s)))
-        }
+        EccModelInput::S(s) => EccModel::try_from(s.as_ref())
+            .map_err(|s| de::Error::custom(format!("{} is not a valid eccentricity model", s))),
     }
 }
 
@@ -147,13 +147,13 @@ pub struct Housekeeping {
 pub struct Grid {
     /// The number of radial zones in each world.
     pub n_zones: usize,
-    /// The length of a single time step in seconds.
+    /// The length of a single time step in years.
     pub time_step: f64,
     /// The speedup multiplier factor.
     pub speedup: f64,
-    /// The total duration of the simulation in gigayears.
+    /// The total duration of the simulation in megayears.
     pub time_total: f64,
-    /// The frequency of output generation in years.
+    /// The frequency of output generation in megayears.
     pub output_every: f64,
 }
 
@@ -262,7 +262,7 @@ where
                 Ok(ChondriteType::CO)
             } else {
                 Err(de::Error::custom(format!(
-                    "{} is an invalid chondrite integer code.",
+                    "{} is an invalid chondrite type integer code.",
                     n
                 )))
             }
@@ -320,13 +320,13 @@ where
 
     match TidalModelInput::deserialize(deserializer)? {
         TidalModelInput::Int(n) => {
-            if n < 2 || n > 5 {
+            if (2..=5).contains(&n) {
+                Ok(unsafe { std::mem::transmute::<u8, TidalModel>(n) }) // this is safe, as both have the same size.
+            } else {
                 Err(de::Error::custom(format!(
                     "{} is an invalid tidal model integer code.",
                     &n
                 )))
-            } else {
-                Ok(unsafe { std::mem::transmute(n) }) // this is safe, as both have the same size.
             }
         }
         TidalModelInput::S(s) => {
@@ -534,7 +534,11 @@ impl IcyDwarfInput {
     /// # Returns
     /// The step interval for cryolava updates.
     pub fn t_cryo(&self) -> i32 {
-        self.subroutines.cryo.after / (self.grid.output_every as i32)
+        if self.grid.output_every > 0.0 {
+            ((self.subroutines.cryo.after as f64 * MYR2SEC) / self.grid.output_every).floor() as i32
+        } else {
+            0
+        }
     }
 
     /// Return the total number of secondary worlds in the simulation.

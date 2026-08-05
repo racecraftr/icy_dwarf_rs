@@ -148,12 +148,16 @@ impl IcyDwarfInput {
             }
         }
 
+        let mut r_grid = Vec::with_capacity(world_state.zones.len() + 1);
+        for zone in &world_state.zones {
+            r_grid.push(zone.radius);
+        }
+        if let Some(last_zone) = world_state.zones.last() {
+            r_grid.push(last_zone.radius + last_zone.dr);
+        }
+
         let y_tide = prop_mtx(
-            &world_state
-                .zones
-                .iter()
-                .map(|x| x.radius)
-                .collect::<Vec<_>>(),
+            &r_grid,
             &rho,
             &g_vec,
             &shearmod,

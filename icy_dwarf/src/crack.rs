@@ -375,12 +375,7 @@ impl IcyDwarfInput {
 /// An optional [`Data`] struct containing lookup tables.
 pub fn read_data(args: &Args) -> Option<Data> {
     Some(Data {
-        // did you know that there is a planet made out of diamonds?
-        // our universe is filled with horrors beyond our comprehension, such as the
-        // supermassive black hole TON-618. (More like SON-618 amirite?)
-        // これを分かれば、すごいんだ
-        // Anyways here's the code
-        atp: read_data_file(&args.data_path("Crack_AtP.txt"))?,
+        atp: read_data_file(&args.data_path("Crack_aTP.txt"))?,
         alpha: read_data_file(&args.data_path("Crack_alpha.txt"))?,
         beta: read_data_file(&args.data_path("Crack_beta.txt"))?,
         chrysotile: read_data_file(&args.data_path("Crack_chrysotile.txt"))?,
@@ -395,23 +390,20 @@ fn read_data_file(dat_file_path: &PathBuf) -> Option<Vec<Vec<f64>>> {
     let Ok(s) = fs::read_to_string(Path::new(dat_file_path)) else {
         return None;
     };
-    let lines = s.lines().collect::<Vec<_>>();
-    if lines.len() == SIZEA_TP {
-        let res = lines
-            .iter()
-            .map(|s| {
-                s.split_whitespace()
-                    .filter_map(|t| t.parse::<f64>().ok())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        if res.iter().all(|v| v.len() == SIZEA_TP) {
-            Some(res)
-        } else {
-            None
-        }
-    } else {
+    let rows: Vec<Vec<f64>> = s
+        .lines()
+        .map(|line| {
+            line.split_whitespace()
+                .filter_map(|t| t.parse::<f64>().ok())
+                .collect()
+        })
+        .filter(|v: &Vec<f64>| !v.is_empty())
+        .collect();
+
+    if rows.is_empty() {
         None
+    } else {
+        Some(rows)
     }
 }
 

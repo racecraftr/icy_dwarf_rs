@@ -155,28 +155,36 @@ impl ZoneState {
             [fh2os, fadhs, fh2ol, fnh3l].map(|n| (n / (1.0 - frock)).unwrap_or_nan(0.));
         let x = gnh3l + XC * gadhs;
 
-        let mut t_lo = 20.0;
-        let mut t_hi = 5000.0;
+        // Fast helper to evaluate total energy and phase fractions at temperature tp
+        let eval_energy = |tp: f64| -> (f64, [f64; 4]) {
+            let erock = heat_rock(tp);
+            let [eice, gh2os_val, gadhs_val, gh2ol_val, gnh3l_val] = heat_ice(tp, x, x_salt);
+            let e_total = frock * erock + (1.0 - frock) * eice;
+            (e_total, [gh2os_val, gadhs_val, gh2ol_val, gnh3l_val])
+        };
+
+        // Warm-start search interval around current temperature if plausible
+        let (mut t_lo, mut t_hi) = if self.temp > 25.0 && self.temp < 4975.0 {
+            ((self.temp - 25.0).max(20.0), (self.temp + 25.0).min(5000.0))
+        } else {
+            (20.0, 5000.0)
+        };
+
+        let (mut elo, _) = eval_energy(t_lo);
+        let (mut ehi, _) = eval_energy(t_hi);
+
+        // Fall back to full range if target energy is outside warm-start bracket
+        if specific_energy < elo || specific_energy > ehi {
+            t_lo = 20.0;
+            t_hi = 5000.0;
+            elo = eval_energy(t_lo).0;
+            ehi = eval_energy(t_hi).0;
+        }
+
         let mut t_md = (t_lo + t_hi) / 2.0;
 
         for _ in 0..30 {
-            // Calculate Elo
-            let tp = t_lo;
-            let erock_lo = heat_rock(tp);
-            let [eice_lo, ..] = heat_ice(tp, x, x_salt);
-            let elo = frock * erock_lo + (1.0 - frock) * eice_lo;
-
-            // Calculate Emd
-            let tp = t_md;
-            let erock_md = heat_rock(tp);
-            let [eice_md, gh2os_md, gadhs_md, gh2ol_md, gnh3l_md] = heat_ice(tp, x, x_salt);
-            let emd = frock * erock_md + (1.0 - frock) * eice_md;
-
-            // Calculate Ehi
-            let tp = t_hi;
-            let erock_hi = heat_rock(tp);
-            let [eice_hi, ..] = heat_ice(tp, x, x_salt);
-            let ehi = frock * erock_hi + (1.0 - frock) * eice_hi;
+            let (emd, phase_md) = eval_energy(t_md);
 
             if specific_energy >= elo
                 && specific_energy <= ehi
@@ -186,16 +194,22 @@ impl ZoneState {
             {
                 if specific_energy <= emd {
                     t_hi = t_md;
+                    ehi = emd;
                 } else {
                     t_lo = t_md;
+                    elo = emd;
                 }
-                t_md = (t_lo + t_hi) / 2.0;
 
-                // Keep updating fractions with the current midpoint
-                gh2os = gh2os_md;
-                gadhs = gadhs_md;
-                gh2ol = gh2ol_md;
-                gnh3l = gnh3l_md;
+                [gh2os, gadhs, gh2ol, gnh3l] = phase_md;
+
+                // Adaptive early exit when bracket is sufficiently tight or energy error is negligible
+                if (t_hi - t_lo).abs() < 1.0e-6
+                    || ((emd - specific_energy).abs() / specific_energy) < 1.0e-7
+                {
+                    break;
+                }
+
+                t_md = (t_lo + t_hi) / 2.0;
             } else {
                 return Err(format!(
                     "Could not compute temperature. Tlo={}, Thi={}, Tmd={}, Elo={}, Ehi={}, Emd={}, E={}",
@@ -307,7 +321,7 @@ impl IcyDwarfInput {
     /// # Parameters
     /// - `output_path`: The file system directory path string for output files.
     pub fn planet_system(&self, output_path: &String) {
-        let dtime = self.grid.time_step * 1.0e-6 * MYR2SEC;
+        let dtime = self.grid.time_step;
         let n_time = (self.grid.time_total / self.grid.time_step) as usize;
         let _n_steps = (self.grid.output_every / self.grid.time_step) as usize;
 
@@ -325,6 +339,7 @@ impl IcyDwarfInput {
             .enumerate()
             .map(|(idx, world)| {
                 let name = &world.name;
+                println!(">> creating output files for {} @ index {}", &name, &idx);
                 for s in ["Thermal", "Heats", "Crack_depth_WR", "Crack_stresses"] {
                     let _ = create_output(output_path, format!("{}_{}_{}.txt", idx, name, s));
                 }
@@ -459,6 +474,7 @@ impl IcyDwarfInput {
         }
 
         if self.housekeeping.recover {
+            println!(">> [planet_system] recovering input...");
             let Some((rec_states, _)) = self.recover(output_path) else {
                 eprintln!("Could not recover input");
                 return;
@@ -477,7 +493,8 @@ impl IcyDwarfInput {
         let mut isteps = 0;
         let n_steps = (self.grid.output_every / self.grid.time_step) as usize;
 
-        for _ in 0..=n_time {
+        for _i in 0..=n_time {
+            // println!("at time loop index {}", _i);
             real_time += dtime;
             let q_prim = self.primary_world.tidal_q.q_prim(&self.worlds, real_time);
 
@@ -536,7 +553,7 @@ impl IcyDwarfInput {
                     .for_each(|w| w.e_orb.max_assign(MIN_ECC));
             }
 
-            // Call Thermal logic
+            // Call Thermal logic synchronously
             self.thermal(&mut world_states, dtime, real_time, &GLOBAL_ARGS);
 
             isteps += 1;
@@ -575,7 +592,7 @@ impl IcyDwarfInput {
                         ];
                         let _ = append_output(
                             output_path,
-                            &format!("{}_{}_Orbit.csv", im, world.name),
+                            &format!("{}_{}_Orbit.txt", im, world.name),
                             &orbit_output,
                         );
                     }
@@ -631,7 +648,7 @@ impl IcyDwarfInput {
                         ];
                         let _ = append_output(
                             output_path,
-                            &format!("{}_{}_Thermal.csv", im, world.name),
+                            &format!("{}_{}_Thermal.txt", im, world.name),
                             &thermal_output,
                         );
                     }
@@ -650,7 +667,7 @@ impl IcyDwarfInput {
                     ];
                     let _ = append_output(
                         output_path,
-                        &format!("{}_{}_Heats.csv", im, world.name),
+                        &format!("{}_{}_Heats.txt", im, world.name),
                         &heat_output,
                     );
 
@@ -668,7 +685,7 @@ impl IcyDwarfInput {
                     let crack_depth_wr_output = [real_time / GYR2SEC, crack_depth, w_r];
                     let _ = append_output(
                         output_path,
-                        &format!("{}_{}_Crack_depth_WR.csv", im, world.name),
+                        &format!("{}_{}_Crack_depth_WR.txt", im, world.name),
                         &crack_depth_wr_output,
                     );
 
@@ -679,7 +696,7 @@ impl IcyDwarfInput {
                         stress_output[11] = zone.crack;
                         let _ = append_output(
                             output_path,
-                            &format!("{}_{}_Crack_stresses.csv", im, world.name),
+                            &format!("{}_{}_Crack_stresses.txt", im, world.name),
                             &stress_output,
                         );
                     }

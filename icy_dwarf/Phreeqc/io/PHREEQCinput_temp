@@ -2,11 +2,11 @@ TITLE IcyDwarf generated speciation input using core8.dat
 
 SOLUTION 1 Cometary fluid
 
-	 pH 	 	7
-	 temp 	 	100 # celsius
-	 pressure	200 # atm
-	 pe		-5.74 # -log activity (e-)
-	 -water		1 #kg
+	 pH 	 	7.34406418718746	 charge
+	 temp 	 	0.01
+	 pressure 	200
+	 pe 	 	-4.91704365274159
+	 -water 	0.1
 	 -units		mol/kgw
 	 C		2.7754 #=5% mol/mol: 0.05/0.01801528
 	 N		1.11 #2% mol/mol: 0.02/0.01801528
@@ -16,8 +16,8 @@ SOLUTION 1 Cometary fluid
 GAS_PHASE 1 No initial gas, formation if sum (partial pressures)>pressure
 
 	-fixed_pressure
-	-pressure 	200
-	-temperature	5
+	 -pressure 	200
+	 -temperature 	0.01
 	C2H4(g)        	0.0
   	C2H6(g)		0.0
 	C3H8(g)		0.0
@@ -435,7 +435,7 @@ SELECTED_OUTPUT 1
 	-distance 	false
 	-time 		false
 	-step 		false
-	-temperature	true
+	 -temperature 	0.01
 	-ionic_strength	true
 	-water		true
 	-totals 	Al B C Ca Cl Co Cr Cu Eu Fe Gd K Li Mg Mn Mo N Na Ni P S Sc Si Sm Th Ti U Zn B(3) C(-2) C(-3) C(-4) C(2) C(4) Cl(-1) Cl(1) Cl(3) Cl(5) Cl(7) Co(2) Co(3) Cr(2) Cr(3) Cr(6) Cu(1) Cu(2) Eu(2) Eu(3) Fe(2) Fe(3) Gd(3) H(0) Mn(2) Mn(3) Mn(6) Mn(7) N(-3) N(0) N(3) N(5) O(0) P(5) S(-2) S(2) S(3) S(4) S(5) S(6) S(7) S(8) Sm(2) Sm(3) U(3) U(4) U(5) U(6)

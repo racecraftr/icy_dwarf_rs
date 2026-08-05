@@ -24,13 +24,11 @@ use std::{
 
 use clap::Parser;
 use faer::mat::{Own, generic::Mat};
-use itertools::Itertools;
 use num::complex::Complex64;
 
 use crate::{
     consts::{CM, GRAM, GYR2SEC, KM2CM, MYR2SEC},
     input::parse_toml,
-    water_rock::water_rock,
 };
 
 /// This struct parses and stores command line arguments.
@@ -89,11 +87,11 @@ For more information, visit https://ww.gnu.org/licenses.
         eprintln!("R_HOME environment variable not set");
         exit(1);
     };
-    let Ok(r_dir) = fs::read_dir(&r_home) else {
+    let Ok(mut r_dir) = fs::read_dir(&r_home) else {
         eprintln!("R_HOME directory does not exist: {}", &r_home);
         exit(1);
     };
-    if r_dir.try_len().unwrap_or(0) == 0 {
+    if r_dir.next().is_none() {
         eprintln!("R_HOME directory is empty: {}", &r_home);
         exit(1);
     }
@@ -107,8 +105,10 @@ For more information, visit https://ww.gnu.org/licenses.
     };
     input.grid.time_total *= MYR2SEC;
     input.grid.output_every *= MYR2SEC;
+    input.grid.time_step *= MYR2SEC / 1.0e6;
     input.primary_world.mass /= GRAM;
     input.primary_world.rad *= KM2CM;
+    input.primary_world.ring.mass /= GRAM;
     input.primary_world.ring.inner *= KM2CM;
     input.primary_world.ring.outer *= KM2CM;
     for world in input.worlds.iter_mut() {
@@ -121,9 +121,8 @@ For more information, visit https://ww.gnu.org/licenses.
     }
     input.world_spec.rho_rock_dry *= GRAM / CM.powi(3);
     input.world_spec.rho_rock_hydr *= GRAM / CM.powi(3);
-    input.grid.time_step = (input.grid.time_total / input.grid.output_every).floor() + 1.;
 
-    println!("{:?}", &input);
+    println!("{:#?}", &input);
 
     if input.subroutines.gen_crack_core {
         println!(">> Calculating expansion mismatch optimal flaw size matrix...");
@@ -157,60 +156,63 @@ For more information, visit https://ww.gnu.org/licenses.
         }
     }
 
+    println!(
+        "{:?}",
+        GLOBAL_ARGS.data_path("Crack_AtP.txt").canonicalize()
+    );
     if input.subroutines.run_therm {
+        let atp_path = GLOBAL_ARGS.data_path("Crack_aTP.txt");
+        let alpha_path = GLOBAL_ARGS.data_path("Crack_alpha.txt");
+        let species_path = GLOBAL_ARGS.data_path("Crack_silica.txt");
+
+        if !atp_path.exists() {
+            println!(">> Crack_aTP.txt not found in data folder. Generating crack core tables...");
+            if let Err(s) =
+                crate::crack_table::a_tp(&GLOBAL_ARGS.data_folder, input.housekeeping.warnings)
+            {
+                eprintln!("ERROR: {}", s);
+                exit(1);
+            }
+        }
+        if !alpha_path.exists() {
+            println!(
+                ">> Crack_alpha.txt not found in data folder. Generating water alpha/beta tables using CHNOSZ..."
+            );
+            if let Err(s) = crate::crack_table::crack_water_chnosz(
+                &GLOBAL_ARGS.data_folder,
+                input.housekeeping.warnings,
+            ) {
+                eprintln!("ERROR: {}", s);
+                exit(1);
+            }
+        }
+        if !species_path.exists() {
+            println!(
+                ">> Crack_silica.txt not found in data folder. Generating crack species tables using CHNOSZ..."
+            );
+            if let Err(s) = crate::crack_table::crack_species_chnosz(
+                &GLOBAL_ARGS.data_folder,
+                input.housekeeping.warnings,
+            ) {
+                eprintln!("ERROR: {}", s);
+                exit(1);
+            }
+        }
+
         println!(">> Running thermal evolution code...");
         input.planet_system(&GLOBAL_ARGS.output_folder);
     }
 
     if input.subroutines.run_geo {
         println!(">> Running PHREEQC across the specified range of parameters...");
-        // TODO: figure out where MoleMass.txt is, and how to implement the phreeqc functions.
-        let geo = &input.subroutines.geo;
-        let t_steps = if geo.temp.step > 0.0 {
-            ((geo.temp.max - geo.temp.min) / geo.temp.step).floor() as usize + 1
-        } else {
-            1
-        };
-        let p_steps = if geo.pressure.step > 0.0 {
-            ((geo.pressure.max - geo.pressure.min) / geo.pressure.step).floor() as usize + 1
-        } else {
-            1
-        };
-
-        let pe_min = 0.25 * geo.pe.min;
-        let pe_max = 0.25 * geo.pe.max;
-        let pe_step = 0.25 * geo.pe.step;
-        let pe_steps = if pe_step > 0.0 {
-            ((pe_max - pe_min) / pe_step).floor() as usize + 1
-        } else {
-            1
-        };
-
-        let wr_steps = if geo.wr_ratio.step > 1.0 {
-            ((geo.wr_ratio.max.ln() - geo.wr_ratio.min.ln()) / geo.wr_ratio.step.ln()).ceil()
-                as usize
-                + 1
-        } else {
-            1
-        };
-
-        for i_t in 0..t_steps {
-            let t = geo.temp.min + (i_t as f64) * geo.temp.step;
-            for i_p in 0..p_steps {
-                let p = geo.pressure.min + (i_p as f64) * geo.pressure.step;
-                for i_pe in 0..pe_steps {
-                    let pe = pe_min + (i_pe as f64) * pe_step;
-                    for i_wr in 0..wr_steps {
-                        let wr = geo.wr_ratio.min * geo.wr_ratio.step.powi(i_wr as i32);
-                        if let Err(s) = water_rock(&GLOBAL_ARGS.data_folder, t, p, pe, wr) {
-                            eprintln!("ERROR: {}", s);
-                            exit(1);
-                        }
-                    }
-                }
-            }
+        if let Err(s) = crate::water_rock::param_exploration(
+            PathBuf::from(&GLOBAL_ARGS.data_folder),
+            PathBuf::from(&GLOBAL_ARGS.output_folder),
+            &input.subroutines.geo,
+        ) {
+            eprintln!("ERROR: {}", s);
+            exit(1);
         }
-        eprintln!(">> PHREEQC integration has not been fully supported just yet.")
     }
 
     if input.subroutines.run_comp {
@@ -244,6 +246,8 @@ For more information, visit https://ww.gnu.org/licenses.
             exit(1);
         }
     }
+
+    println!("Exiting IcyDwarf...");
 }
 
 /// Create an output file in the output directory if it does not exist.
@@ -292,7 +296,7 @@ pub fn append_output(output_path: &String, file_name: &str, data: &[f64]) -> Res
         .iter()
         .map(|v| v.to_string())
         .collect::<Vec<_>>()
-        .join(",");
+        .join("\t");
     if let Err(e) = writeln!(file, "{}", line) {
         return Err(format!(
             "Unable to write to file {}: {}",

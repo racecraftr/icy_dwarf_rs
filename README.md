@@ -17,6 +17,7 @@ Rust allows for a lot of things that C doesn't.
 - The `CHNOSZ` package is written in fortran, so `libgfortran` must be installed. 
 - The `IPHREEQC` library installed in order to 
 - Given the project *is* written in rust, make sure `cargo` is installed on your machine. 
+- `just` should be installed to check if all the above packages are installed, 
 
 Note that you 
   may have to set the `$RHOME` variable on your machine differently to what it is configured to. 
@@ -46,14 +47,9 @@ From here, installing and running the program is easy.
 ```sh 
 git clone https://www.github/racecraftr/icy_dwarf_rs.git
 cd icy_dwarf_rs/icy_dwarf
-cargo run []
-```
-
-**To install to your `$PATH$`**: 
-```sh
-git clone https://www.github/racecraftr/icy_dwarf_rs.git
-cd icy_dwarf_rs/icy_dwarf
-cargo install
+just check 
+just build
+cargo run [FLAGS]
 ```
 
 ***Hold on, what is `build.rs`?***  

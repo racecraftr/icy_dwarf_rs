@@ -6,6 +6,12 @@ dotfile_init:
     mkdir -p "~/.icy_dwarf"
     cp Phreeqc ~/.icy_dwarf/
 
+[windows]
+dotfile_init:
+    mkdir "%APPDATA%\\icy_dwarf"
+    xcopy /E /I Phreeqc "%APPDATA\\icy_dwarf"
+
+
 [unix]
 check:
     #!/bin/sh
