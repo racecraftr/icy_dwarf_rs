@@ -10,31 +10,33 @@ use crate::{
     consts::*,
     input::IcyDwarfInput,
     planet_system::{RHO_H2OL_TH, WorldState},
-    thermal::{C0, K, prop_mtx},
+    thermal::{C0, K, ThermalWorkspace, prop_mtx},
 };
 
 impl IcyDwarfInput {
-    pub fn tide(&self, world_state: &mut WorldState) {
+    pub fn tide(&self, world_state: &mut WorldState, workspace: &mut ThermalWorkspace) {
         const D_EPS: f64 = 2.22e-16;
-        let base_vec = vec![0_f64; world_state.zones.len()];
-        let mut shearmod = vec![C0; world_state.zones.len()];
-        let mut rho = base_vec.clone();
+        let n_zones = world_state.zones.len();
+        let shearmod = &mut workspace.shearmod;
+        shearmod.fill(C0);
+        let rho = &mut workspace.rho;
+        rho.fill(0.0);
+        let m_acc = &mut workspace.m_acc;
+        m_acc.fill(0.0);
+        let g_vec = &mut workspace.g_vec;
+        g_vec.fill(0.0);
 
         const MU_RIGID_ICE: f64 = 4.0e9 / GRAM * CM;
 
-        // accumulated mass throughout all the zones.
-        let mut m_acc = base_vec.clone();
-        let mut g_vec = base_vec.clone();
-        drop(base_vec);
         let alpha_andr = 0.3;
         for (i, zone) in world_state.zones.iter().enumerate() {
             rho[i] = zone.mass_total / zone.volumes().0; // density is just mass over volume
             m_acc[i] = zone.mass_total + if i == 0 { 0. } else { m_acc[i - 1] };
             g_vec[i] = GCGS * m_acc[i] / (zone.radius + zone.dr).powi(2);
-            let z = if i < world_state.zones.len() - 1 {
+            let z = if i < n_zones - 1 {
                 zone
             } else {
-                &world_state.zones[world_state.zones.len() - 2]
+                &world_state.zones[n_zones - 2]
             };
             let mut mu_visc = PA2BA * z.pressure * z.creep();
             if zone.mass_ice > 0.
@@ -148,21 +150,15 @@ impl IcyDwarfInput {
             }
         }
 
-        let mut r_grid = Vec::with_capacity(world_state.zones.len() + 1);
-        for zone in &world_state.zones {
-            r_grid.push(zone.radius);
+        let r_grid = &mut workspace.r_grid;
+        for (i, zone) in world_state.zones.iter().enumerate() {
+            r_grid[i] = zone.radius;
         }
         if let Some(last_zone) = world_state.zones.last() {
-            r_grid.push(last_zone.radius + last_zone.dr);
+            r_grid[n_zones] = last_zone.radius + last_zone.dr;
         }
 
-        let y_tide = prop_mtx(
-            &r_grid,
-            &rho,
-            &g_vec,
-            &shearmod,
-            0,
-        );
+        let y_tide = prop_mtx(r_grid, rho, g_vec, shearmod, 0);
 
         let (e2, e4, e6, e8, e10) = world_state.ecc();
         let eterm_1 = e10 * (2555911.0 / 122880.0) - e8 * (63949.0 / 2304.0) + e6 * (551.0 / 12.0)

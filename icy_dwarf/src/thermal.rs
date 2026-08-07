@@ -26,6 +26,65 @@ mod tide;
 const K: f64 = 200.0e9 / GRAM * CM;
 const C0: Complex64 = Complex64::ZERO;
 
+/// Pre-allocated reusable workspace memory for thermal and tidal calculations.
+#[derive(Clone, Debug, Default)]
+pub struct ThermalWorkspace {
+    pub qth: Vec<f64>,
+    pub rrflux: Vec<f64>,
+    pub m_rock_new: Vec<f64>,
+    pub m_h2os_new: Vec<f64>,
+    pub m_adhs_new: Vec<f64>,
+    pub m_h2ol_new: Vec<f64>,
+    pub m_nh3l_new: Vec<f64>,
+    pub v_rock_new: Vec<f64>,
+    pub v_h2os_new: Vec<f64>,
+    pub v_adhs_new: Vec<f64>,
+    pub v_h2ol_new: Vec<f64>,
+    pub v_nh3l_new: Vec<f64>,
+    pub vol_cell: Vec<f64>,
+    pub dont_dehydrate: Vec<bool>,
+    pub gravity: Vec<f64>,
+    pub r_old: Vec<f64>,
+    pub pore_old: Vec<f64>,
+
+    // Tide buffers
+    pub shearmod: Vec<Complex64>,
+    pub rho: Vec<f64>,
+    pub m_acc: Vec<f64>,
+    pub g_vec: Vec<f64>,
+    pub r_grid: Vec<f64>,
+}
+
+impl ThermalWorkspace {
+    pub fn new(n_zones: usize) -> Self {
+        Self {
+            qth: vec![0.0; n_zones],
+            rrflux: vec![0.0; n_zones + 1],
+            m_rock_new: vec![0.0; n_zones],
+            m_h2os_new: vec![0.0; n_zones],
+            m_adhs_new: vec![0.0; n_zones],
+            m_h2ol_new: vec![0.0; n_zones],
+            m_nh3l_new: vec![0.0; n_zones],
+            v_rock_new: vec![0.0; n_zones],
+            v_h2os_new: vec![0.0; n_zones],
+            v_adhs_new: vec![0.0; n_zones],
+            v_h2ol_new: vec![0.0; n_zones],
+            v_nh3l_new: vec![0.0; n_zones],
+            vol_cell: vec![0.0; n_zones],
+            dont_dehydrate: vec![false; n_zones],
+            gravity: vec![0.0; n_zones],
+            r_old: vec![0.0; n_zones + 1],
+            pore_old: vec![0.0; n_zones],
+
+            shearmod: vec![C0; n_zones],
+            rho: vec![0.0; n_zones],
+            m_acc: vec![0.0; n_zones],
+            g_vec: vec![0.0; n_zones],
+            r_grid: vec![0.0; n_zones + 1],
+        }
+    }
+}
+
 impl IcyDwarfInput {
     /// Execute 1D thermal evolution and heat transport calculations for all worlds.
     ///
@@ -41,9 +100,10 @@ impl IcyDwarfInput {
         dtime: f64,
         real_time: f64,
         args: &Args,
+        workspace: &mut ThermalWorkspace,
     ) {
         for world_state in world_states.iter_mut() {
-            self.thermal_world(world_state, dtime, real_time, args);
+            self.thermal_world(world_state, dtime, real_time, args, workspace);
         }
     }
 
@@ -54,22 +114,27 @@ impl IcyDwarfInput {
     /// - `dtime`: The duration of the time step in seconds.
     /// - `real_time`: The current simulation time in seconds.
     /// - `args`: The [`Args`] containing the data path.
+    /// - `workspace`: Pre-allocated memory workspace.
     pub fn thermal_world(
         &self,
         world_state: &mut WorldState,
         dtime: f64,
         real_time: f64,
         args: &Args,
+        workspace: &mut ThermalWorkspace,
     ) {
         // 1. Calculate Pressure
-        self.calculate_pressure(world_state);
+        self.calculate_pressure(world_state, workspace);
 
         // 2. Update Porosity & Radii (Creep & Compaction)
-        self.update_porosity(world_state, dtime);
+        self.update_porosity(world_state, dtime, workspace);
 
         // 3. Cracking
         let Some(crack_data) = read_data(args) else {
-            eprintln!("ERROR: Could not read crack lookup tables from data folder ({})", args.data_folder);
+            eprintln!(
+                "ERROR: Could not read crack lookup tables from data folder ({})",
+                args.data_folder
+            );
             return;
         };
         for zone in world_state.zones.iter_mut() {
@@ -77,13 +142,13 @@ impl IcyDwarfInput {
         }
 
         // 4. Tidal heating (solid)
-        self.tide(world_state);
+        self.tide(world_state, workspace);
         world_state.heat_tide += world_state.w_tide_tot;
 
         let n_zones = world_state.zones.len();
 
         // 5. Radioactive Decay Heating (Qth)
-        let mut qth = vec![0.0; n_zones];
+        workspace.qth.fill(0.0);
         let frac_k_leached = 0.0;
 
         let mut q_kleached_tot = 0.0;
@@ -92,7 +157,7 @@ impl IcyDwarfInput {
 
         for (i, zone) in world_state.zones.iter().enumerate() {
             let (q_zone, q_k) = zone.decay(real_time, frac_k_leached, &self.world_spec);
-            qth[i] += q_zone;
+            workspace.qth[i] += q_zone;
             q_kleached_tot += q_k;
             m_liq_tot += zone.mass_water;
             if zone.mass_ice > 0.0 && i < irh2os {
@@ -103,25 +168,25 @@ impl IcyDwarfInput {
         // Distribute heat from leached radionuclides among layers containing liquid water
         if m_liq_tot > 0.0 {
             for (i, zone) in world_state.zones.iter().enumerate() {
-                qth[i] += q_kleached_tot * zone.mass_water / m_liq_tot;
+                workspace.qth[i] += q_kleached_tot * zone.mass_water / m_liq_tot;
             }
         } else if n_zones > 0 {
-            qth[irh2os] += q_kleached_tot;
+            workspace.qth[irh2os] += q_kleached_tot;
         }
 
         // Track total radioactive heat
-        world_state.heat_radio += qth.iter().sum::<f64>();
+        world_state.heat_radio += workspace.qth.iter().sum::<f64>();
 
         // Add tidal heating to Qth
         for (i, zone) in world_state.zones.iter().enumerate() {
-            qth[i] += zone.tide_heat_rate * 1.0e7;
+            workspace.qth[i] += zone.tide_heat_rate * 1.0e7;
         }
 
         // Add fluid tidal heating to Qth (using tropf)
-        self.fluid_tide(world_state, &mut qth);
+        self.fluid_tide(world_state, &mut workspace.qth);
 
         // Rock Hydration & Dehydration
-        self.process_hydration(world_state, &mut qth, dtime);
+        self.process_hydration(world_state, dtime, workspace);
 
         // Layer Differentiation (melting / Rayleigh-Taylor)
         let world_info = self.worlds.iter().find(|w| w.name == world_state.name);
@@ -143,11 +208,11 @@ impl IcyDwarfInput {
         }
         if world_state.irdiff > 0 && world_state.irdiff != irdiff_old {
             let irdiff = world_state.irdiff;
-            self.separate(world_state, irdiff);
+            self.separate(world_state, irdiff, workspace);
         }
 
         // Gravitational Heating Release
-        self.gravitational_heating(world_state, &mut qth, dtime);
+        self.gravitational_heating(world_state, dtime, workspace);
 
         // Parameterized Convection
         self.convect(world_state);
@@ -158,21 +223,25 @@ impl IcyDwarfInput {
         }
 
         // 7. Conductive Fluxes (rrflux)
-        let mut rrflux = vec![0.0; n_zones + 1];
+        workspace.rrflux.fill(0.0);
+        let zones = &world_state.zones;
         for i in 1..n_zones {
-            let r_i = world_state.zones[i - 1].radius;
-            let r_next = world_state.zones[i].radius;
+            let z_curr = unsafe { zones.get_unchecked(i) };
+            let z_prev = unsafe { zones.get_unchecked(i - 1) };
+            let r_i = z_prev.radius;
+            let r_next = z_curr.radius;
             let r_prev = if i > 1 {
-                world_state.zones[i - 2].radius
+                unsafe { zones.get_unchecked(i - 2) }.radius
             } else {
                 0.0
             };
             let dr_denom = r_next - r_prev;
             if dr_denom > 0.0 {
-                rrflux[i] = -(r_i * r_i)
-                    * (world_state.zones[i].kappa + world_state.zones[i - 1].kappa)
-                    * (world_state.zones[i].temp - world_state.zones[i - 1].temp)
-                    / dr_denom;
+                unsafe {
+                    *workspace.rrflux.get_unchecked_mut(i) =
+                        -(r_i * r_i) * (z_curr.kappa + z_prev.kappa) * (z_curr.temp - z_prev.temp)
+                            / dr_denom;
+                }
             }
         }
 
@@ -183,8 +252,13 @@ impl IcyDwarfInput {
 
         // 9. Solve Heat Equation (Energy Update)
         for i in 0..n_zones.saturating_sub(1) {
-            world_state.zones[i].energy_total +=
-                dtime * qth[i] + 4.0 * PI * dtime * (rrflux[i] - rrflux[i + 1]);
+            unsafe {
+                let zone = world_state.zones.get_unchecked_mut(i);
+                let q_val = *workspace.qth.get_unchecked(i);
+                let flux_curr = *workspace.rrflux.get_unchecked(i);
+                let flux_next = *workspace.rrflux.get_unchecked(i + 1);
+                zone.energy_total += dtime * q_val + 4.0 * PI * dtime * (flux_curr - flux_next);
+            }
         }
 
         // 10. Phase Equilibrium / State Update
@@ -241,7 +315,12 @@ impl IcyDwarfInput {
     }
 
     /// Perform core separation / unmixing of differentiated layers.
-    pub fn separate(&self, world_state: &mut WorldState, irdiff: usize) {
+    pub fn separate(
+        &self,
+        world_state: &mut WorldState,
+        irdiff: usize,
+        workspace: &mut ThermalWorkspace,
+    ) {
         let n_zones = world_state.zones.len();
         if n_zones == 0 || irdiff >= n_zones {
             return;
@@ -251,19 +330,30 @@ impl IcyDwarfInput {
         let x_fines = world_info.map(|w| w.rock_frac).unwrap_or(0.0);
         let x_pores = world_info.map(|w| w.rock_h20).unwrap_or(0.0);
 
-        let mut m_rock_new = vec![0.0; n_zones];
-        let mut m_h2os_new = vec![0.0; n_zones];
-        let mut m_adhs_new = vec![0.0; n_zones];
-        let mut m_h2ol_new = vec![0.0; n_zones];
-        let mut m_nh3l_new = vec![0.0; n_zones];
+        let m_rock_new = &mut workspace.m_rock_new;
+        m_rock_new.fill(0.0);
+        let m_h2os_new = &mut workspace.m_h2os_new;
+        m_h2os_new.fill(0.0);
+        let m_adhs_new = &mut workspace.m_adhs_new;
+        m_adhs_new.fill(0.0);
+        let m_h2ol_new = &mut workspace.m_h2ol_new;
+        m_h2ol_new.fill(0.0);
+        let m_nh3l_new = &mut workspace.m_nh3l_new;
+        m_nh3l_new.fill(0.0);
 
-        let mut v_rock_new = vec![0.0; n_zones];
-        let mut v_h2os_new = vec![0.0; n_zones];
-        let mut v_adhs_new = vec![0.0; n_zones];
-        let mut v_h2ol_new = vec![0.0; n_zones];
-        let mut v_nh3l_new = vec![0.0; n_zones];
+        let v_rock_new = &mut workspace.v_rock_new;
+        v_rock_new.fill(0.0);
+        let v_h2os_new = &mut workspace.v_h2os_new;
+        v_h2os_new.fill(0.0);
+        let v_adhs_new = &mut workspace.v_adhs_new;
+        v_adhs_new.fill(0.0);
+        let v_h2ol_new = &mut workspace.v_h2ol_new;
+        v_h2ol_new.fill(0.0);
+        let v_nh3l_new = &mut workspace.v_nh3l_new;
+        v_nh3l_new.fill(0.0);
 
-        let mut vol_cell = vec![0.0; n_zones];
+        let vol_cell = &mut workspace.vol_cell;
+        vol_cell.fill(0.0);
         for jr in 0..=irdiff {
             vol_cell[jr] = world_state.zones[jr].volumes().0;
         }
@@ -402,7 +492,12 @@ impl IcyDwarfInput {
     }
 
     /// Process rock hydration and dehydration across grid zones and update heats of reaction.
-    pub fn process_hydration(&self, world_state: &mut WorldState, qth: &mut [f64], dtime: f64) {
+    pub fn process_hydration(
+        &self,
+        world_state: &mut WorldState,
+        dtime: f64,
+        workspace: &mut ThermalWorkspace,
+    ) {
         let n_zones = world_state.zones.len();
         if n_zones == 0 || dtime <= 0.0 {
             return;
@@ -413,7 +508,8 @@ impl IcyDwarfInput {
         let rho_hydr_th = self.world_spec.rho_hydr_th();
         let rho_h2ol_th = RHO_H2OL_TH;
 
-        let mut dont_dehydrate = vec![false; n_zones];
+        let dont_dehydrate = &mut workspace.dont_dehydrate;
+        dont_dehydrate.fill(false);
 
         let mut ircore = 0;
         for (ir, zone) in world_state.zones.iter().enumerate() {
@@ -507,8 +603,8 @@ impl IcyDwarfInput {
             let delta_x = zone.x_hydr - zone.x_hydr_old;
             if delta_x.abs() > 1.0e-10 {
                 let q_rxn = delta_x * zone.mass_rock * crate::consts::HHYDR / dtime;
-                if ir < qth.len() {
-                    qth[ir] += q_rxn;
+                if ir < workspace.qth.len() {
+                    workspace.qth[ir] += q_rxn;
                 }
                 if delta_x > 0.0 {
                     world_state.heat_serp += q_rxn;
@@ -521,7 +617,12 @@ impl IcyDwarfInput {
     }
 
     /// Calculate gravitational potential energy release during differentiation.
-    pub fn gravitational_heating(&self, world_state: &mut WorldState, qth: &mut [f64], dtime: f64) {
+    pub fn gravitational_heating(
+        &self,
+        world_state: &mut WorldState,
+        dtime: f64,
+        workspace: &mut ThermalWorkspace,
+    ) {
         let n_zones = world_state.zones.len();
         if n_zones == 0 || dtime <= 0.0 {
             return;
@@ -557,8 +658,8 @@ impl IcyDwarfInput {
                 for ir in 0..=irdiff {
                     let zone_vol = world_state.zones[ir].volumes().0;
                     let heat_rate = delta_phi * (zone_vol / total_diff_vol);
-                    if ir < qth.len() {
-                        qth[ir] += heat_rate;
+                    if ir < workspace.qth.len() {
+                        workspace.qth[ir] += heat_rate;
                     }
                     world_state.heat_grav += heat_rate;
                 }
@@ -614,9 +715,9 @@ impl IcyDwarfInput {
         }
     }
 
-    pub fn calculate_pressure(&self, world: &mut WorldState) {
+    pub fn calculate_pressure(&self, world: &mut WorldState, workspace: &mut ThermalWorkspace) {
         let mut cumulative_mass = 0.0;
-        let mut gravity = vec![0.0; self.grid.n_zones];
+        let gravity = &mut workspace.gravity;
 
         for (i, zone) in world.zones.iter().enumerate() {
             cumulative_mass += zone.mass_total;
@@ -653,13 +754,18 @@ impl IcyDwarfInput {
         }
     }
 
-    fn update_porosity(&self, world: &mut WorldState, dtime: f64) {
-        let mut r_old = vec![0.0; self.grid.n_zones + 1];
+    fn update_porosity(
+        &self,
+        world: &mut WorldState,
+        dtime: f64,
+        workspace: &mut ThermalWorkspace,
+    ) {
+        let r_old = &mut workspace.r_old;
         r_old[0] = 0.0;
         for (ir, zone) in world.zones.iter().enumerate() {
             r_old[ir + 1] = zone.radius;
         }
-        let mut pore_old = vec![0.0; self.grid.n_zones];
+        let pore_old = &mut workspace.pore_old;
         for (ir, zone) in world.zones.iter().enumerate() {
             pore_old[ir] = zone.porosity;
         }

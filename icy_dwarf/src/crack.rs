@@ -136,13 +136,14 @@ impl IcyDwarfInput {
                     warnings,
                 );
                 let p_int = look_up(zone.pressure, 0.0, P_STEP, SIZEA_TP, warnings);
-                let integral_line = (data.atp[delta_t_int][p_int] / A_MIN) as usize; // Index in the integral table
-                let atp_val = data.atp[delta_t_int][p_int];
+                let atp_val = unsafe { *data.atp.get_unchecked(delta_t_int).get_unchecked(p_int) };
+                let integral_line = (atp_val / A_MIN) as usize; // Index in the integral table
+                let integral_val = unsafe { *data.integral.get_unchecked(integral_line).get_unchecked(1) };
 
                 // Calculate K_I
                 let n = (PI * atp_val).sqrt();
                 output.stress_intensity =
-                    SQRT_2 / n * data.integral[integral_line][1] * e_young * DELTA_ALPHA
+                    SQRT_2 / n * integral_val * e_young * DELTA_ALPHA
                         / (TAU * (1.0 - nu_poisson.powi(2)))
                         * (t_prime - zone.temp).abs()
                         - zone.pressure * n
@@ -191,11 +192,13 @@ impl IcyDwarfInput {
                 SIZEA_TP,
                 warnings,
             );
+            let alpha_val = unsafe { *data.alpha.get_unchecked(tempk_int).get_unchecked(p_int) };
+            let beta_val = unsafe { *data.beta.get_unchecked(tempk_int).get_unchecked(p_int) };
             // Calculate fluid overpressure from heating, including geometric effects (Le Ravalec & Guéguen 1994)
             output.p_pore += (1.0 + 2.0 * ASPECT_RATIO)
-                * data.alpha[tempk_int][p_int]
+                * alpha_val
                 * (zone.temp - zone.temp_old)
-                / (data.beta[tempk_int][p_int] / BAR
+                / (beta_val / BAR
                     + ASPECT_RATIO * 3.0 * (1.0 - 2.0 * nu_poisson) / e_young);
         }
 
@@ -407,11 +410,12 @@ fn read_data_file(dat_file_path: &PathBuf) -> Option<Vec<Vec<f64>>> {
     }
 }
 
-/// Helper lookup function to return correct index in a table.
-fn look_up(x: f64, mut x_var: f64, x_step: f64, size: usize, warnings: bool) -> usize {
-    if x <= x_step {
+/// Helper lookup function to return correct index in a table in O(1) time.
+#[inline]
+fn look_up(x: f64, x_var: f64, x_step: f64, size: usize, warnings: bool) -> usize {
+    if x <= x_var + 0.5 * x_step {
         0
-    } else if x > x_var + x_step * ((size - 1) as f64) {
+    } else if x >= x_var + x_step * ((size - 1) as f64) {
         if warnings {
             println!(
                 "IcyDwarf look_up: x={} above range, assuming x={}",
@@ -421,16 +425,8 @@ fn look_up(x: f64, mut x_var: f64, x_step: f64, size: usize, warnings: bool) -> 
         }
         size - 1
     } else {
-        let mut x_int = 0;
-        for j in 0..size {
-            let lower = x_var - 0.5 * x_step;
-            let upper = x_var + 0.5 * x_step;
-            if lower > 0.0 && x > lower && x < upper {
-                x_int = j;
-            }
-            x_var += x_step;
-        }
-        x_int
+        let idx = ((x - x_var) / x_step).round() as usize;
+        idx.min(size - 1)
     }
 }
 

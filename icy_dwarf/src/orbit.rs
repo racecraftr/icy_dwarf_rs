@@ -228,8 +228,8 @@ impl IcyDwarfInput {
                     aring_out,
                 };
 
-                let mut y = vec![h_0, k_0, a0, h_1, k_1, a1];
-                let dydx = vec![0.0; 6];
+                let mut y = [h_0, k_0, a0, h_1, k_1, a1];
+                let dydx = [0.0; 6];
 
                 let steps = (d_time / self.grid.speedup / ORB_D_TIME) as i64;
                 for _q in 0..steps {
@@ -915,21 +915,20 @@ pub fn d2_laplace_coef(alpha: f64, j: f64, s: f64) -> f64 {
 /// # Returns
 /// The integrated variable vector at the end of the step.
 pub fn mmid(
-    y: &[f64],
-    dydx: &[f64],
+    y: &[f64; 6],
+    dydx: &[f64; 6],
     params: &MmrAvgHamParams,
     xs: f64,
     htot: f64,
     nstep: usize,
-    derivs: fn(f64, &[f64], &MmrAvgHamParams) -> Vec<f64>,
-) -> Vec<f64> {
-    let nv = y.len();
-    let mut ym = vec![0.0; nv];
-    let mut yn = vec![0.0; nv];
+    derivs: fn(f64, &[f64; 6], &MmrAvgHamParams) -> [f64; 6],
+) -> [f64; 6] {
+    let mut ym = [0.0; 6];
+    let mut yn = [0.0; 6];
 
     let h = htot / (nstep as f64);
 
-    for i in 0..nv {
+    for i in 0..6 {
         ym[i] = y[i];
         yn[i] = y[i] + h * dydx[i];
     }
@@ -939,8 +938,8 @@ pub fn mmid(
     let h2 = 2.0 * h;
 
     for _n in 1..nstep {
-        let mut swap = vec![0.0; nv];
-        for i in 0..nv {
+        let mut swap = [0.0; 6];
+        for i in 0..6 {
             swap[i] = ym[i] + h2 * dy[i];
             ym[i] = yn[i];
             yn[i] = swap[i];
@@ -949,8 +948,8 @@ pub fn mmid(
         dy = derivs(x, &yn, params);
     }
 
-    let mut yout = vec![0.0; nv];
-    for i in 0..nv {
+    let mut yout = [0.0; 6];
+    for i in 0..6 {
         yout[i] = 0.5 * (ym[i] + yn[i] + h * dy[i]);
     }
     yout
@@ -1020,7 +1019,7 @@ pub struct MmrAvgHamParams {
 ///
 /// # Returns
 /// A vector of calculated state derivatives.
-pub fn mmr_avg_ham(_x: f64, y: &[f64], params: &MmrAvgHamParams) -> Vec<f64> {
+pub fn mmr_avg_ham(_x: f64, y: &[f64; 6], params: &MmrAvgHamParams) -> [f64; 6] {
     let h = [y[0], y[3]];
     let k = [y[1], y[4]];
     let a_ = [y[2], y[5]];
@@ -1193,5 +1192,5 @@ pub fn mmr_avg_ham(_x: f64, y: &[f64], params: &MmrAvgHamParams) -> Vec<f64> {
 
     let da_ = [0, 1].map(|im| 2.0 * a_[im] / lambda[im] * d_lambda_tide[im]);
 
-    vec![dh[0], dk[0], da_[0], dh[1], dk[1], da_[1]]
+    [dh[0], dk[0], da_[0], dh[1], dk[1], da_[1]]
 }

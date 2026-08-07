@@ -9,6 +9,7 @@ use crate::{
     consts::*,
     crack, create_output,
     input::{Fracs, IcyDwarfInput, IcyWorld, QMode, TidalQ, WorldSpec},
+    thermal::ThermalWorkspace,
     traits::float_traits::FloatExt,
 };
 
@@ -449,6 +450,8 @@ impl IcyDwarfInput {
             })
             .collect();
 
+        let mut thermal_workspace = ThermalWorkspace::new(self.grid.n_zones);
+
         // Handle initial differentiation if requested
         for (idx, world) in self.worlds.iter().enumerate() {
             if world.start_diff {
@@ -456,7 +459,7 @@ impl IcyDwarfInput {
                 if n_zones > 0 {
                     let max_diff = n_zones - 1;
                     world_states[idx].irdiff = max_diff;
-                    self.separate(&mut world_states[idx], max_diff);
+                    self.separate(&mut world_states[idx], max_diff, &mut thermal_workspace);
                 }
             }
         }
@@ -554,7 +557,7 @@ impl IcyDwarfInput {
             }
 
             // Call Thermal logic synchronously
-            self.thermal(&mut world_states, dtime, real_time, &GLOBAL_ARGS);
+            self.thermal(&mut world_states, dtime, real_time, &GLOBAL_ARGS, &mut thermal_workspace);
 
             isteps += 1;
 
