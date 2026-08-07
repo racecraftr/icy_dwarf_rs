@@ -1,5 +1,5 @@
-build: check dotfile_init
-    cargo build
+build: check
+    cargo build --release
 
 [unix]
 dotfile_init:
